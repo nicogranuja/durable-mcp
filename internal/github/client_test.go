@@ -1,10 +1,12 @@
 package github_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -694,5 +696,31 @@ func TestWithHTTPClientKeepsCallerRedirectPolicy(t *testing.T) {
 	elsewhere := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://elsewhere.example/", http.NoBody)
 	if err := hc.CheckRedirect(elsewhere, nil); !errors.Is(err, http.ErrUseLastResponse) {
 		t.Errorf("caller's CheckRedirect returned %v after New, want its own result; New must not modify it", err)
+	}
+}
+
+func TestClientDoesNotPrintToken(t *testing.T) {
+	t.Parallel()
+
+	const secret = "ghp_supersecret"
+	c, err := github.New(secret)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var logged bytes.Buffer
+	slog.New(slog.NewTextHandler(&logged, nil)).Info("client", "client", c, "value", *c)
+
+	outputs := map[string]string{
+		"%v":       fmt.Sprintf("%v", c),
+		"%+v":      fmt.Sprintf("%+v", c),
+		"%#v":      fmt.Sprintf("%#v", c),
+		"%+v of *": fmt.Sprintf("%+v", *c),
+		"slog":     logged.String(),
+	}
+	for format, out := range outputs {
+		if strings.Contains(out, "supersecret") {
+			t.Errorf("%s output contains the token: %s", format, out)
+		}
 	}
 }

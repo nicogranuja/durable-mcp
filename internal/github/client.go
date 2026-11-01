@@ -43,9 +43,12 @@ const (
 // Client is a GitHub REST API client. Create one with New. A Client is safe
 // for concurrent use by multiple goroutines.
 type Client struct {
-	httpClient       *http.Client
-	baseURL          *url.URL
-	token            string
+	httpClient *http.Client
+	baseURL    *url.URL
+	// authorization is the Authorization header value, or nil for an
+	// unauthenticated client. It sits behind a pointer so that printing a
+	// Client with fmt or slog shows an address instead of the token.
+	authorization    *string
 	userAgent        string
 	apiVersion       string
 	timeout          time.Duration
@@ -157,10 +160,16 @@ func New(token string, opts ...Option) (*Client, error) {
 		hc = &cp
 	}
 
+	var authorization *string
+	if token != "" {
+		v := "Bearer " + token
+		authorization = &v
+	}
+
 	c := &Client{
 		httpClient:       hc,
 		baseURL:          base,
-		token:            token,
+		authorization:    authorization,
 		userAgent:        o.userAgent,
 		apiVersion:       o.apiVersion,
 		timeout:          o.timeout,
@@ -251,8 +260,8 @@ func (c *Client) get(ctx context.Context, u *url.URL) (*response, error) {
 	req.Header.Set("Accept", mediaType)
 	req.Header.Set("X-GitHub-Api-Version", c.apiVersion)
 	req.Header.Set("User-Agent", c.userAgent)
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if c.authorization != nil {
+		req.Header.Set("Authorization", *c.authorization)
 	}
 
 	resp, err := c.httpClient.Do(req)
