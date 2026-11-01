@@ -196,8 +196,8 @@ type response struct {
 	body   []byte
 }
 
-// endpoint returns the absolute URL for an API path relative to the base
-// URL. Path elements are escaped as needed.
+// endpoint returns the absolute URL of the API path made of elem, under the
+// base URL. Callers validate user-supplied elements first (see validateRepo).
 func (c *Client) endpoint(elem ...string) *url.URL {
 	return c.baseURL.JoinPath(elem...)
 }
