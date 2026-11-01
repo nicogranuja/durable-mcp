@@ -32,4 +32,14 @@
 // apply its own policy. In this project the caller is a Temporal activity,
 // which is meant to fail the attempt with a retry delay derived from RetryAt,
 // so the wait happens durably in Temporal and shows up in workflow history.
+//
+// # Pagination
+//
+// List methods return a [Pager] that follows the Link header's rel="next"
+// URL one page at a time, with [Pager.All] as a range-over-func iterator on
+// top. [Pager.Cursor] exposes the next page as an opaque string, so a later
+// process, such as the next Temporal activity, can resume where the previous
+// one stopped. Next-page links and cursors must stay on the base URL's
+// origin and path, so the token is never sent to another host, and
+// [WithMaxPages] bounds how far one Pager goes.
 package github

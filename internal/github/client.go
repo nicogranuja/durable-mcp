@@ -50,6 +50,7 @@ type Client struct {
 	apiVersion       string
 	timeout          time.Duration
 	maxResponseBytes int64
+	maxPages         int
 }
 
 // Option configures a Client.
@@ -62,6 +63,7 @@ type options struct {
 	apiVersion       string
 	timeout          time.Duration
 	maxResponseBytes int64
+	maxPages         int
 }
 
 // WithBaseURL sets the API root, for GitHub Enterprise Server
@@ -100,6 +102,13 @@ func WithMaxResponseBytes(n int64) Option {
 	return func(o *options) { o.maxResponseBytes = n }
 }
 
+// WithMaxPages sets how many pages a single Pager may fetch before
+// NextPage fails with ErrPageLimit. The guard bounds the cost of listing a
+// very large repository and stops a Link header that never ends.
+func WithMaxPages(n int) Option {
+	return func(o *options) { o.maxPages = n }
+}
+
 // New returns a Client that authenticates with token. An empty token makes
 // unauthenticated requests, which GitHub allows for public data at a much
 // lower rate limit.
@@ -113,6 +122,7 @@ func New(token string, opts ...Option) (*Client, error) {
 		apiVersion:       DefaultAPIVersion,
 		timeout:          DefaultTimeout,
 		maxResponseBytes: DefaultMaxResponseBytes,
+		maxPages:         DefaultMaxPages,
 	}
 	for _, opt := range opts {
 		opt(&o)
@@ -127,6 +137,8 @@ func New(token string, opts ...Option) (*Client, error) {
 		return nil, fmt.Errorf("github: timeout must not be negative, got %s", o.timeout)
 	case o.maxResponseBytes <= 0:
 		return nil, fmt.Errorf("github: max response bytes must be positive, got %d", o.maxResponseBytes)
+	case o.maxPages <= 0:
+		return nil, fmt.Errorf("github: max pages must be positive, got %d", o.maxPages)
 	case o.userAgent == "":
 		return nil, errors.New("github: user agent must not be empty")
 	case o.apiVersion == "":
@@ -145,6 +157,7 @@ func New(token string, opts ...Option) (*Client, error) {
 		apiVersion:       o.apiVersion,
 		timeout:          o.timeout,
 		maxResponseBytes: o.maxResponseBytes,
+		maxPages:         o.maxPages,
 	}, nil
 }
 

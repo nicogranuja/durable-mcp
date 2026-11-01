@@ -21,10 +21,6 @@ linters:
     govet:
       enable:
         - nilness
-        - shadow
-      settings:
-        shadow:
-          strict: false
     revive:
       rules:
         - name: exported
