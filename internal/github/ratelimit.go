@@ -13,8 +13,9 @@ import (
 // least one minute.
 const secondaryRetryFallback = time.Minute
 
-// maxRetryAfter caps a Retry-After value so a bogus header cannot overflow
-// time.Duration or park a caller for days.
+// maxRetryAfter caps any rate-limit wait so a bogus Retry-After or
+// X-RateLimit-Reset header cannot overflow time.Duration or park a caller
+// for days.
 const maxRetryAfter = 24 * time.Hour
 
 // RateLimitKind distinguishes GitHub's two kinds of rate limit.
@@ -94,10 +95,12 @@ type RateLimitError struct {
 	// Kind says which rate limit was hit.
 	Kind RateLimitKind
 
-	// RetryAt is the earliest time a retry can succeed. It comes from
-	// X-RateLimit-Reset for primary limits and from Retry-After, or a
-	// one-minute default, for secondary limits. It can be in the past if
-	// the local clock runs ahead of GitHub's; treat that as "retry now".
+	// RetryAt is the earliest time, on the local clock, that a retry can
+	// succeed: the response's arrival time plus the longest wait GitHub
+	// asked for, through X-RateLimit-Reset (measured against GitHub's Date
+	// header, so a skewed local clock does not shorten or stretch it) and
+	// Retry-After. Without either, the wait is one minute. It is capped at
+	// 24 hours.
 	RetryAt time.Time
 
 	// Rate is the primary rate-limit state, if the response included it.
@@ -126,46 +129,67 @@ func responseError(resp *http.Response, body []byte, now time.Time) error {
 }
 
 // rateLimitError reports whether a 403 or 429 response is a rate limit, and
-// if so when to retry, following GitHub's documented rules:
+// if so which kind and when to retry, following GitHub's documented rules:
 //
-//   - X-RateLimit-Remaining: 0 means the primary quota is exhausted until
-//     X-RateLimit-Reset.
-//   - Retry-After means a secondary limit; wait that long.
-//   - Otherwise a 429, or a 403 whose message mentions a secondary rate
-//     limit, is a secondary limit; wait at least a minute.
+//   - A message that mentions a secondary rate limit means a secondary
+//     limit, whatever the headers say.
+//   - Otherwise X-RateLimit-Remaining: 0 means the primary quota is
+//     exhausted until X-RateLimit-Reset.
+//   - Otherwise Retry-After, or a 429 status, means a secondary limit.
 //
 // Any other 403 is a permission error and rateLimitError returns nil.
+//
+// The wait is the longest of the signals present: the time until
+// X-RateLimit-Reset when the quota is exhausted, and Retry-After. With
+// neither, GitHub's guidance is to wait at least a minute.
 func rateLimitError(apiErr *APIError, h http.Header, now time.Time) *RateLimitError {
 	if apiErr.StatusCode != http.StatusForbidden && apiErr.StatusCode != http.StatusTooManyRequests {
 		return nil
 	}
 
 	rate, hasRate := parseRate(h)
+	exhausted := hasRate && rate.Remaining == 0
 	retryAfter, hasRetryAfter := parseRetryAfter(h.Get("Retry-After"), now)
-	e := &RateLimitError{APIError: apiErr, Rate: rate}
+	secondary := strings.Contains(strings.ToLower(apiErr.Message), "secondary rate limit")
 
+	e := &RateLimitError{APIError: apiErr, Rate: rate}
 	switch {
-	case hasRate && rate.Remaining == 0:
+	case secondary:
+		e.Kind = SecondaryRateLimit
+	case exhausted:
 		e.Kind = PrimaryRateLimit
-		e.RetryAt = rate.Reset
-		if e.RetryAt.IsZero() {
-			e.RetryAt = now.Add(secondaryRetryFallback)
-		}
-		// If GitHub also asks for a longer pause, honor the later time.
-		if hasRetryAfter && now.Add(retryAfter).After(e.RetryAt) {
-			e.RetryAt = now.Add(retryAfter)
-		}
-	case hasRetryAfter:
+	case hasRetryAfter || apiErr.StatusCode == http.StatusTooManyRequests:
 		e.Kind = SecondaryRateLimit
-		e.RetryAt = now.Add(retryAfter)
-	case apiErr.StatusCode == http.StatusTooManyRequests,
-		strings.Contains(strings.ToLower(apiErr.Message), "secondary rate limit"):
-		e.Kind = SecondaryRateLimit
-		e.RetryAt = now.Add(secondaryRetryFallback)
 	default:
 		return nil
 	}
+
+	var wait time.Duration
+	known := false
+	if exhausted && !rate.Reset.IsZero() {
+		wait, known = untilReset(rate.Reset, h.Get("Date"), now), true
+	}
+	if hasRetryAfter {
+		wait, known = max(wait, retryAfter), true
+	}
+	if !known {
+		wait = secondaryRetryFallback
+	}
+	e.RetryAt = now.Add(min(wait, maxRetryAfter))
 	return e
+}
+
+// untilReset returns how long until reset. It measures against GitHub's
+// clock, from the response's Date header, when that is available: reset is
+// an absolute time on GitHub's clock, and comparing it with a local clock
+// that runs fast would retry while still limited, which GitHub warns can get
+// an integration blocked.
+func untilReset(reset time.Time, date string, now time.Time) time.Duration {
+	serverNow := now
+	if t, err := http.ParseTime(date); err == nil {
+		serverNow = t
+	}
+	return max(reset.Sub(serverNow), 0)
 }
 
 // parseRetryAfter parses a Retry-After value, which is either a number of

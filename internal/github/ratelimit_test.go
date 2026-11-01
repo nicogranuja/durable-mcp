@@ -19,9 +19,15 @@ const (
 func TestRateLimitErrors(t *testing.T) {
 	t.Parallel()
 
-	reset := time.Now().Add(42 * time.Minute).Truncate(time.Second)
+	now := time.Now()
+	reset := now.Add(42 * time.Minute).Truncate(time.Second)
 	resetUnix := strconv.FormatInt(reset.Unix(), 10)
-	retryDate := time.Now().Add(2 * time.Minute).UTC().Truncate(time.Second)
+	retryDate := now.Add(2 * time.Minute).UTC().Truncate(time.Second)
+	unix := func(t time.Time) string { return strconv.FormatInt(t.Unix(), 10) }
+	httpDate := func(t time.Time) string { return t.UTC().Format(http.TimeFormat) }
+	// GitHub's clock, ten minutes behind and ahead of the local one.
+	serverBehind := now.Add(-10 * time.Minute).Truncate(time.Second)
+	serverAhead := now.Add(10 * time.Minute).Truncate(time.Second)
 
 	tests := []struct {
 		name     string
@@ -29,8 +35,9 @@ func TestRateLimitErrors(t *testing.T) {
 		headers  []string
 		body     string
 		wantKind github.RateLimitKind
-		// Exactly one of wantRetryAt (absolute) and wantRetryIn (relative to
-		// the request) is set.
+		// Exactly one of wantRetryAt (absolute, to within the one-second
+		// resolution of the Date header) and wantRetryIn (relative to the
+		// request) is set.
 		wantRetryAt time.Time
 		wantRetryIn time.Duration
 		wantRate    github.Rate
@@ -75,6 +82,51 @@ func TestRateLimitErrors(t *testing.T) {
 			body:        primaryLimitBody,
 			wantKind:    github.PrimaryRateLimit,
 			wantRetryIn: time.Minute,
+		},
+		{
+			name:        "primary limit with GitHub's clock behind",
+			status:      http.StatusForbidden,
+			headers:     []string{"X-RateLimit-Remaining", "0", "X-RateLimit-Reset", unix(serverBehind.Add(5 * time.Minute)), "Date", httpDate(serverBehind)},
+			body:        primaryLimitBody,
+			wantKind:    github.PrimaryRateLimit,
+			wantRetryIn: 5 * time.Minute,
+			wantRate:    github.Rate{Remaining: 0, Reset: serverBehind.Add(5 * time.Minute)},
+		},
+		{
+			name:        "primary limit with GitHub's clock ahead",
+			status:      http.StatusForbidden,
+			headers:     []string{"X-RateLimit-Remaining", "0", "X-RateLimit-Reset", unix(serverAhead.Add(5 * time.Minute)), "Date", httpDate(serverAhead)},
+			body:        primaryLimitBody,
+			wantKind:    github.PrimaryRateLimit,
+			wantRetryIn: 5 * time.Minute,
+			wantRate:    github.Rate{Remaining: 0, Reset: serverAhead.Add(5 * time.Minute)},
+		},
+		{
+			name:        "primary limit whose reset has already passed",
+			status:      http.StatusForbidden,
+			headers:     []string{"X-RateLimit-Remaining", "0", "X-RateLimit-Reset", unix(serverBehind.Add(-time.Minute)), "Date", httpDate(serverBehind)},
+			body:        primaryLimitBody,
+			wantKind:    github.PrimaryRateLimit,
+			wantRetryIn: 0,
+			wantRate:    github.Rate{Remaining: 0, Reset: serverBehind.Add(-time.Minute)},
+		},
+		{
+			name:        "bogus reset far in the future is capped",
+			status:      http.StatusForbidden,
+			headers:     []string{"X-RateLimit-Remaining", "0", "X-RateLimit-Reset", unix(now.AddDate(1, 0, 0)), "Date", httpDate(now)},
+			body:        primaryLimitBody,
+			wantKind:    github.PrimaryRateLimit,
+			wantRetryIn: 24 * time.Hour,
+			wantRate:    github.Rate{Remaining: 0, Reset: now.AddDate(1, 0, 0).Truncate(time.Second)},
+		},
+		{
+			name:        "secondary limit with an exhausted quota",
+			status:      http.StatusForbidden,
+			headers:     []string{"X-RateLimit-Remaining", "0", "X-RateLimit-Reset", resetUnix},
+			body:        secondaryLimitBody,
+			wantKind:    github.SecondaryRateLimit,
+			wantRetryAt: reset,
+			wantRate:    github.Rate{Remaining: 0, Reset: reset},
 		},
 		{
 			name:        "secondary limit with Retry-After seconds",
@@ -145,8 +197,9 @@ func TestRateLimitErrors(t *testing.T) {
 			}
 
 			if !tt.wantRetryAt.IsZero() {
-				if !rl.RetryAt.Equal(tt.wantRetryAt) {
-					t.Errorf("RetryAt = %v, want %v", rl.RetryAt, tt.wantRetryAt)
+				lo, hi := tt.wantRetryAt.Add(-time.Second), tt.wantRetryAt.Add(time.Second+after.Sub(before))
+				if rl.RetryAt.Before(lo) || rl.RetryAt.After(hi) {
+					t.Errorf("RetryAt = %v, want %v (to within a second)", rl.RetryAt, tt.wantRetryAt)
 				}
 			} else {
 				// RetryAt is computed from the client's clock when the
