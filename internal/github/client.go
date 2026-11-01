@@ -73,8 +73,9 @@ func WithBaseURL(rawURL string) Option {
 }
 
 // WithHTTPClient sets the underlying HTTP client, for example to customize
-// the transport. The client's own Timeout still applies in addition to the
-// per-request timeout set by WithTimeout.
+// the transport. New copies it and wraps its CheckRedirect so that redirects
+// cannot leave the API (see New). The client's own Timeout still applies in
+// addition to the per-request timeout set by WithTimeout.
 func WithHTTPClient(hc *http.Client) Option {
 	return func(o *options) { o.httpClient = hc }
 }
@@ -114,7 +115,11 @@ func WithMaxPages(n int) Option {
 // lower rate limit.
 //
 // New refuses to send a token over plain HTTP to anything but a loopback
-// address.
+// address. The same rule as for pagination links applies to redirects: the
+// client only follows a redirect that stays on the base URL's scheme, host,
+// and path, so the token never reaches another host or a downgraded
+// connection. GitHub's own redirects, such as a renamed repository moving to
+// /repositories/ID, stay on the API and are followed.
 func New(token string, opts ...Option) (*Client, error) {
 	o := options{
 		baseURL:          DefaultBaseURL,
@@ -144,12 +149,15 @@ func New(token string, opts ...Option) (*Client, error) {
 	case o.apiVersion == "":
 		return nil, errors.New("github: API version must not be empty")
 	}
-	hc := o.httpClient
-	if hc == nil {
-		hc = &http.Client{}
+	// Copy the caller's client so that installing CheckRedirect does not
+	// change its behavior elsewhere.
+	hc := &http.Client{}
+	if o.httpClient != nil {
+		cp := *o.httpClient
+		hc = &cp
 	}
 
-	return &Client{
+	c := &Client{
 		httpClient:       hc,
 		baseURL:          base,
 		token:            token,
@@ -158,7 +166,32 @@ func New(token string, opts ...Option) (*Client, error) {
 		timeout:          o.timeout,
 		maxResponseBytes: o.maxResponseBytes,
 		maxPages:         o.maxPages,
-	}, nil
+	}
+	hc.CheckRedirect = c.checkRedirect(hc.CheckRedirect)
+	return c, nil
+}
+
+// maxRedirects matches net/http's default redirect limit.
+const maxRedirects = 10
+
+// checkRedirect returns an http.Client.CheckRedirect that refuses redirects
+// outside the API and then defers to next, or to the default limit if next
+// is nil. Without it, net/http would forward the Authorization header to
+// any redirect target on the same host, whatever its scheme, port, or path.
+func (c *Client) checkRedirect(next func(*http.Request, []*http.Request) error) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if !c.ownsURL(req.URL) {
+			return fmt.Errorf("refusing to follow redirect to %s, which is outside %s",
+				req.URL.Redacted(), c.baseURL.Redacted())
+		}
+		if next != nil {
+			return next(req, via)
+		}
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxRedirects)
+		}
+		return nil
+	}
 }
 
 func parseBaseURL(rawURL string, hasToken bool) (*url.URL, error) {

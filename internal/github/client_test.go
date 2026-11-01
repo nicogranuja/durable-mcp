@@ -545,3 +545,154 @@ func TestCancellationAndTimeouts(t *testing.T) {
 		})
 	}
 }
+
+func TestRedirects(t *testing.T) {
+	t.Parallel()
+
+	// outside stands in for any server the token must never reach.
+	var outsideHits atomic.Int32
+	outside := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		outsideHits.Add(1)
+		respond(http.StatusOK, repoJSON)(w, r)
+	}))
+	t.Cleanup(outside.Close)
+
+	tests := []struct {
+		name     string
+		basePath string
+		tls      bool
+		// location returns the redirect target given the API server's URL.
+		location func(api string) string
+		// wantErr is a substring of the expected error; "" means the
+		// redirect should be followed.
+		wantErr string
+	}{
+		{
+			name:     "renamed repository on the same API",
+			location: func(api string) string { return api + "/repositories/42" },
+		},
+		{
+			name:     "another host",
+			location: func(string) string { return outside.URL + "/repos/acme/widgets" },
+			wantErr:  "refusing to follow redirect",
+		},
+		{
+			name:     "HTTPS API redirecting to plain HTTP",
+			tls:      true,
+			location: func(string) string { return outside.URL + "/repos/acme/widgets" },
+			wantErr:  "refusing to follow redirect",
+		},
+		{
+			name:     "same host outside the enterprise API path",
+			basePath: "/api/v3",
+			location: func(api string) string { return api + "/login/oauth" },
+			wantErr:  "refusing to follow redirect",
+		},
+		{
+			name:     "encoded dot segments",
+			basePath: "/api/v3",
+			location: func(api string) string { return api + "/api/v3/%2e%2e/login/oauth" },
+			wantErr:  "refusing to follow redirect",
+		},
+		{
+			name:     "redirect loop",
+			location: func(api string) string { return api + "/repos/acme/widgets" },
+			wantErr:  "stopped after 10 redirects",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// followed receives the Authorization header of every request
+			// that arrives after a redirect.
+			followed := make(chan string, 1)
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == tt.basePath+"/repos/acme/widgets" {
+					api := "http://" + r.Host
+					if r.TLS != nil {
+						api = "https://" + r.Host
+					}
+					http.Redirect(w, r, tt.location(api), http.StatusMovedPermanently)
+					return
+				}
+				followed <- r.Header.Get("Authorization")
+				respond(http.StatusOK, repoJSON)(w, r)
+			})
+			srv := httptest.NewUnstartedServer(handler)
+			if tt.tls {
+				srv.StartTLS()
+			} else {
+				srv.Start()
+			}
+			t.Cleanup(srv.Close)
+
+			c, err := github.New(testToken, github.WithBaseURL(srv.URL+tt.basePath), github.WithHTTPClient(srv.Client()))
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			_, err = c.GetRepository(t.Context(), "acme", "widgets")
+
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("GetRepository error = %v, want it to contain %q", err, tt.wantErr)
+				}
+				select {
+				case <-followed:
+					t.Error("the API server received the redirected request")
+				default:
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetRepository: %v", err)
+			}
+			if auth := <-followed; auth != "Bearer "+testToken {
+				t.Errorf("redirected request Authorization = %q, want the token", auth)
+			}
+		})
+	}
+
+	t.Cleanup(func() {
+		if n := outsideHits.Load(); n != 0 {
+			t.Errorf("outside server received %d requests, want 0", n)
+		}
+	})
+}
+
+func TestWithHTTPClientKeepsCallerRedirectPolicy(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/repositories/42", http.StatusMovedPermanently)
+	}))
+	t.Cleanup(srv.Close)
+
+	var calls atomic.Int32
+	stop := func(*http.Request, []*http.Request) error {
+		calls.Add(1)
+		return http.ErrUseLastResponse
+	}
+	hc := &http.Client{CheckRedirect: stop}
+	c, err := github.New(testToken, github.WithBaseURL(srv.URL), github.WithHTTPClient(hc))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// The caller's policy still runs after the client's own check: here it
+	// stops at the 301, which surfaces as an APIError.
+	_, err = c.GetRepository(t.Context(), "acme", "widgets")
+	if apiErr, ok := errors.AsType[*github.APIError](err); !ok || apiErr.StatusCode != http.StatusMovedPermanently {
+		t.Errorf("GetRepository error = %v, want a 301 APIError", err)
+	}
+	if calls.Load() != 1 {
+		t.Errorf("caller's CheckRedirect ran %d times, want 1", calls.Load())
+	}
+
+	// New works on a copy: the caller's client must still allow a redirect
+	// to another host, which the client's own check would refuse.
+	elsewhere := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://elsewhere.example/", http.NoBody)
+	if err := hc.CheckRedirect(elsewhere, nil); !errors.Is(err, http.ErrUseLastResponse) {
+		t.Errorf("caller's CheckRedirect returned %v after New, want its own result; New must not modify it", err)
+	}
+}

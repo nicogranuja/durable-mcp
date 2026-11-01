@@ -39,7 +39,12 @@
 // URL one page at a time, with [Pager.All] as a range-over-func iterator on
 // top. [Pager.Cursor] exposes the next page as an opaque string, so a later
 // process, such as the next Temporal activity, can resume where the previous
-// one stopped. Next-page links and cursors must stay on the base URL's
-// origin and path, so the token is never sent to another host, and
-// [WithMaxPages] bounds how far one Pager goes.
+// one stopped. [WithMaxPages] bounds how far one Pager goes.
+//
+// # Where the token goes
+//
+// Every URL the client did not build itself (next-page links, cursors, and
+// redirects) must stay on the base URL's scheme, host, and path, with no
+// encoded dot segments, or the client refuses it. The token is never sent to
+// another host or over a downgraded connection.
 package github

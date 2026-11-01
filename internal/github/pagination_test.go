@@ -389,6 +389,18 @@ func TestPagerNextLinkOrigin(t *testing.T) {
 			link:     func(host string) string { return `<http://` + host + `/api/v3/../admin/issues?page=2>; rel="next"` },
 			wantErr:  true,
 		},
+		{
+			name:     "percent-encoded dot segments",
+			basePath: "/api/v3",
+			link:     func(string) string { return `</api/v3/%2e%2e/login/issues?page=2>; rel="next"` },
+			wantErr:  true,
+		},
+		{
+			name:     "dot segments with an encoded slash",
+			basePath: "/api/v3",
+			link:     func(string) string { return `</api/v3/..%2f..%2fadmin/issues?page=2>; rel="next"` },
+			wantErr:  true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -455,6 +467,7 @@ func TestListIssuesInvalidCursor(t *testing.T) {
 		{name: "relative URL", cursor: "/api/v3/repositories/42/issues?page=2"},
 		{name: "outside the API path", cursor: srv.URL + "/repositories/42/issues?page=2"},
 		{name: "dot segments", cursor: srv.URL + "/api/v3/../repositories/42/issues?page=2"},
+		{name: "percent-encoded dot segments", cursor: srv.URL + "/api/v3/%2e%2e/%2e%2e/admin/issues"},
 		{name: "another resource", cursor: srv.URL + "/api/v3/repositories/42/pulls?page=2"},
 		{name: "credentials", cursor: strings.Replace(srv.URL, "http://", "http://user:pass@", 1) + "/api/v3/repositories/42/issues"},
 		{name: "unparseable", cursor: "http://%zz"},

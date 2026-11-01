@@ -228,12 +228,24 @@ func (c *Client) nextPageURL(h http.Header, current *url.URL) (*url.URL, error) 
 }
 
 // ownsURL reports whether u is on the client's API: same scheme and host as
-// the base URL and under its path.
+// the base URL and under its path. It guards every URL the client did not
+// build itself: next-page links, cursors, and redirects.
 func (c *Client) ownsURL(u *url.URL) bool {
-	return u.Scheme == c.baseURL.Scheme &&
-		strings.EqualFold(u.Host, c.baseURL.Host) &&
-		u.User == nil &&
-		strings.HasPrefix(u.Path, c.baseURL.Path)
+	if u.Scheme != c.baseURL.Scheme ||
+		!strings.EqualFold(u.Host, c.baseURL.Host) ||
+		u.User != nil ||
+		!strings.HasPrefix(u.Path, c.baseURL.Path) {
+		return false
+	}
+	// URL resolution removes literal dot segments, so any left in the
+	// decoded path were percent-encoded (%2e%2e, ..%2f). A server that
+	// decodes them could still climb out of the base path.
+	for seg := range strings.SplitSeq(u.Path, "/") {
+		if seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // nextLink returns the target of the rel="next" link in the given Link
