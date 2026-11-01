@@ -29,8 +29,9 @@ var (
 	ErrPageLimit = errors.New("github: page limit reached")
 
 	// ErrInvalidCursor is returned when ListOptions.Cursor is malformed or
-	// does not point at the client's API.
-	ErrInvalidCursor = errors.New("github: invalid cursor")
+	// does not point at the same listing on the client's API. It also
+	// matches ErrInvalidArgument.
+	ErrInvalidCursor = fmt.Errorf("%w: cursor", ErrInvalidArgument)
 )
 
 // ListOptions holds the pagination parameters shared by list methods.
@@ -42,6 +43,14 @@ type ListOptions struct {
 	// Cursor resumes a listing at the page identified by an earlier
 	// Pager.Cursor. When it is set, the list method's other options are
 	// ignored, because the cursor already encodes them.
+	//
+	// A cursor is checked, not authenticated. It must point at the same
+	// resource of the same repository on the client's API, addressed by
+	// name (repos/OWNER/REPO/issues) or by the numeric ID GitHub uses in
+	// next links (repositories/ID/issues). The ID form cannot be matched to
+	// OWNER/REPO without another request, so cursors should come from
+	// trusted state, such as the workflow history that stores them, and not
+	// from untrusted callers.
 	Cursor string
 }
 
@@ -61,13 +70,14 @@ type Pager[T any] struct {
 	rate   Rate
 }
 
-// newPager returns a Pager for the endpoint at path with query q, or one
-// resumed from opts.Cursor.
-func newPager[T any](c *Client, path []string, q url.Values, opts ListOptions, decode func([]byte) ([]T, error)) (*Pager[T], error) {
+// newPager returns a Pager for the repository list endpoint
+// repos/OWNER/REPO/RESOURCE with query q, or one resumed from opts.Cursor.
+// owner and repo must already be validated.
+func newPager[T any](c *Client, owner, repo, resource string, q url.Values, opts ListOptions, decode func([]byte) ([]T, error)) (*Pager[T], error) {
 	p := &Pager[T]{client: c, decode: decode}
 
 	if opts.Cursor != "" {
-		u, err := c.parseCursor(opts.Cursor, path[len(path)-1])
+		u, err := c.parseCursor(opts.Cursor, owner, repo, resource)
 		if err != nil {
 			return nil, err
 		}
@@ -83,7 +93,7 @@ func newPager[T any](c *Client, path []string, q url.Values, opts ListOptions, d
 		return nil, fmt.Errorf("%w: per page must be between 1 and %d, got %d", ErrInvalidArgument, maxPerPage, perPage)
 	}
 	q.Set("per_page", strconv.Itoa(perPage))
-	p.next = c.endpoint(path...)
+	p.next = c.endpoint("repos", owner, repo, resource)
 	p.next.RawQuery = q.Encode()
 	return p, nil
 }
@@ -189,22 +199,54 @@ func decodeList[T any](body []byte) ([]T, error) {
 	return items, nil
 }
 
-// parseCursor validates a cursor from a caller. It must be an absolute URL
-// on the client's API for the given resource (the last path segment, such as
-// "issues"), so a cursor can neither send the token to another host nor
-// decode one resource as another.
-func (c *Client) parseCursor(cursor, resource string) (*url.URL, error) {
+// parseCursor validates a cursor from a caller (see ListOptions.Cursor), so
+// that a cursor can neither send the token to another host nor turn one
+// listing into another.
+func (c *Client) parseCursor(cursor, owner, repo, resource string) (*url.URL, error) {
 	u, err := url.Parse(cursor)
 	if err != nil {
+		// url.Parse errors quote the whole input, which may hold
+		// credentials; keep only the reason.
+		if uerr, ok := errors.AsType[*url.Error](err); ok {
+			err = uerr.Err
+		}
 		return nil, fmt.Errorf("%w: %w", ErrInvalidCursor, err)
 	}
 	if u.IsAbs() {
 		u = c.baseURL.ResolveReference(u) // removes "." and ".." segments
 	}
-	if !u.IsAbs() || !c.ownsURL(u) || !strings.HasSuffix(u.Path, "/"+resource) {
-		return nil, fmt.Errorf("%w: %q is not a %s page on %s", ErrInvalidCursor, cursor, resource, c.baseURL.Redacted())
+	if !u.IsAbs() || !c.ownsURL(u) || !listingPath(strings.TrimPrefix(u.Path, c.baseURL.Path), owner, repo, resource) {
+		return nil, fmt.Errorf("%w: %s is not a page of %s/%s %s on %s",
+			ErrInvalidCursor, u.Redacted(), owner, repo, resource, c.baseURL.Redacted())
 	}
 	return u, nil
+}
+
+// listingPath reports whether path, relative to the base URL, is the given
+// repository listing: repos/OWNER/REPO/RESOURCE, with GitHub's
+// case-insensitive names, or repositories/ID/RESOURCE.
+func listingPath(path, owner, repo, resource string) bool {
+	seg := strings.Split(path, "/")
+	switch {
+	case len(seg) == 4 && seg[0] == "repos":
+		return strings.EqualFold(seg[1], owner) && strings.EqualFold(seg[2], repo) && seg[3] == resource
+	case len(seg) == 3 && seg[0] == "repositories":
+		return isDigits(seg[1]) && seg[2] == resource
+	default:
+		return false
+	}
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // nextPageURL returns the rel="next" URL from the response's Link header,

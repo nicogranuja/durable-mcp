@@ -71,7 +71,7 @@ func (c *Client) ListIssues(owner, repo string, opts IssueListOptions) (*Pager[I
 	if !opts.Since.IsZero() {
 		q.Set("since", formatTime(opts.Since))
 	}
-	return newPager(c, []string{"repos", owner, repo, "issues"}, q, opts.ListOptions, decodeIssues)
+	return newPager(c, owner, repo, "issues", q, opts.ListOptions, decodeIssues)
 }
 
 func decodeIssues(body []byte) ([]Issue, error) {

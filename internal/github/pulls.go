@@ -60,5 +60,5 @@ func (c *Client) ListPullRequests(owner, repo string, opts PullRequestListOption
 	if opts.Direction != "" {
 		q.Set("direction", opts.Direction)
 	}
-	return newPager(c, []string{"repos", owner, repo, "pulls"}, q, opts.ListOptions, decodeList[PullRequest])
+	return newPager(c, owner, repo, "pulls", q, opts.ListOptions, decodeList[PullRequest])
 }

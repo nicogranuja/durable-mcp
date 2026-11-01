@@ -67,5 +67,5 @@ func (c *Client) ListCommits(owner, repo string, opts CommitListOptions) (*Pager
 	if !opts.Until.IsZero() {
 		q.Set("until", formatTime(opts.Until))
 	}
-	return newPager(c, []string{"repos", owner, repo, "commits"}, q, opts.ListOptions, decodeList[Commit])
+	return newPager(c, owner, repo, "commits", q, opts.ListOptions, decodeList[Commit])
 }

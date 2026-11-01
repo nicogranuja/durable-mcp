@@ -445,7 +445,7 @@ func TestPagerNextLinkOrigin(t *testing.T) {
 	})
 }
 
-func TestListIssuesInvalidCursor(t *testing.T) {
+func TestListIssuesCursorValidation(t *testing.T) {
 	t.Parallel()
 
 	var hits atomic.Int32
@@ -458,26 +458,51 @@ func TestListIssuesInvalidCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	api := srv.URL + "/api/v3"
 
 	tests := []struct {
 		name   string
 		cursor string
+		valid  bool
 	}{
+		{name: "same repository by name", cursor: api + "/repos/acme/widgets/issues?page=2", valid: true},
+		{name: "repository names are case-insensitive", cursor: api + "/repos/ACME/Widgets/issues?page=2", valid: true},
+		{name: "same resource by repository ID", cursor: api + "/repositories/42/issues?after=Y3Vyc29y", valid: true},
+
 		{name: "another host", cursor: "https://attacker.example/api/v3/repositories/42/issues?page=2"},
 		{name: "relative URL", cursor: "/api/v3/repositories/42/issues?page=2"},
 		{name: "outside the API path", cursor: srv.URL + "/repositories/42/issues?page=2"},
-		{name: "dot segments", cursor: srv.URL + "/api/v3/../repositories/42/issues?page=2"},
-		{name: "percent-encoded dot segments", cursor: srv.URL + "/api/v3/%2e%2e/%2e%2e/admin/issues"},
-		{name: "another resource", cursor: srv.URL + "/api/v3/repositories/42/pulls?page=2"},
-		{name: "credentials", cursor: strings.Replace(srv.URL, "http://", "http://user:pass@", 1) + "/api/v3/repositories/42/issues"},
+		{name: "dot segments", cursor: api + "/../repositories/42/issues?page=2"},
+		{name: "percent-encoded dot segments", cursor: api + "/%2e%2e/%2e%2e/admin/issues"},
+		{name: "credentials", cursor: strings.Replace(api, "http://", "http://user:pass@", 1) + "/repositories/42/issues"},
 		{name: "unparseable", cursor: "http://%zz"},
+		{name: "another resource", cursor: api + "/repositories/42/pulls?page=2"},
+		{name: "another repository", cursor: api + "/repos/other/private/issues?page=2"},
+		{name: "another owner", cursor: api + "/repos/other/widgets/issues?page=2"},
+		{name: "issues across all repositories", cursor: api + "/issues?filter=all&page=2"},
+		{name: "organization issues", cursor: api + "/orgs/secret-org/issues?page=2"},
+		{name: "issue search", cursor: api + "/search/issues?q=token&page=2"},
+		{name: "non-numeric repository ID", cursor: api + "/repositories/abc/issues?page=2"},
+		{name: "extra path segment", cursor: api + "/repos/acme/widgets/issues/1?page=2"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := c.ListIssues("acme", "widgets", github.IssueListOptions{ListOptions: github.ListOptions{Cursor: tt.cursor}})
-			if !errors.Is(err, github.ErrInvalidCursor) {
-				t.Errorf("ListIssues error = %v, want ErrInvalidCursor", err)
+			pager, err := c.ListIssues("acme", "widgets", github.IssueListOptions{ListOptions: github.ListOptions{Cursor: tt.cursor}})
+			if tt.valid {
+				if err != nil {
+					t.Fatalf("ListIssues: %v", err)
+				}
+				if pager.Cursor() != tt.cursor {
+					t.Errorf("Cursor = %q, want %q", pager.Cursor(), tt.cursor)
+				}
+				return
+			}
+			if !errors.Is(err, github.ErrInvalidCursor) || !errors.Is(err, github.ErrInvalidArgument) {
+				t.Errorf("ListIssues error = %v, want ErrInvalidCursor and ErrInvalidArgument", err)
+			}
+			if err != nil && strings.Contains(err.Error(), "pass") {
+				t.Errorf("error %q leaks the cursor's credentials", err)
 			}
 		})
 	}
