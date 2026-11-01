@@ -172,6 +172,11 @@ func (p *Pager[T]) Rate() Rate {
 // Iteration ends after the first error, which is yielded with the zero T.
 // If the loop stops early, the rest of the current page is dropped and the
 // pager stays positioned at the following page.
+//
+// All is for listings that finish within one process. Inside the loop,
+// Cursor already points past the page being iterated, so it is not a safe
+// checkpoint. To checkpoint, call NextPage, process the whole page, and then
+// save Cursor; a resumed Pager starts at the next unprocessed page.
 func (p *Pager[T]) All(ctx context.Context) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		for p.HasNext() {

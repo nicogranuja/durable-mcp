@@ -187,8 +187,8 @@ func TestListCommitsRejectsInvertedWindow(t *testing.T) {
 func TestListMethodsValidateRepo(t *testing.T) {
 	t.Parallel()
 
-	// No server: validation must fail before any request is attempted.
-	c, err := github.New(testToken, github.WithBaseURL("http://127.0.0.1:1"))
+	// List methods only build a Pager, so these calls need no server.
+	c, err := github.New(testToken)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

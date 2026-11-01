@@ -155,9 +155,9 @@ func TestRequestHeaders(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			var got http.Header
+			headers := make(chan http.Header, 1)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				got = r.Header.Clone()
+				headers <- r.Header.Clone()
 				respond(http.StatusOK, repoJSON)(w, r)
 			}))
 			t.Cleanup(srv.Close)
@@ -169,6 +169,7 @@ func TestRequestHeaders(t *testing.T) {
 			if _, err := c.GetRepository(t.Context(), "acme", "widgets"); err != nil {
 				t.Fatalf("GetRepository: %v", err)
 			}
+			got := <-headers
 
 			checks := []struct{ header, want string }{
 				{"Authorization", tt.wantAuth},
@@ -200,9 +201,9 @@ func TestGetRepository(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			var gotPath string
+			paths := make(chan string, 1)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				gotPath = r.URL.Path
+				paths <- r.URL.Path
 				respond(http.StatusOK, repoJSON)(w, r)
 			}))
 			t.Cleanup(srv.Close)
@@ -215,7 +216,7 @@ func TestGetRepository(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetRepository: %v", err)
 			}
-			if gotPath != tt.wantPath {
+			if gotPath := <-paths; gotPath != tt.wantPath {
 				t.Errorf("request path = %q, want %q", gotPath, tt.wantPath)
 			}
 			if repo.FullName != "acme/widgets" || repo.Owner.Login != "acme" || repo.StargazersCount != 42 {
@@ -332,7 +333,16 @@ func TestAPIErrors(t *testing.T) {
 			wantText: "502 Bad Gateway",
 		},
 		{
-			name:     "error body larger than the response limit",
+			// Error bodies have their own 64 KiB read limit, separate from
+			// the 1 KiB WithMaxResponseBytes used in this test.
+			name:        "error body over the response limit is still decoded",
+			status:      http.StatusUnprocessableEntity,
+			body:        `{"message":"` + strings.Repeat("x", 8<<10) + `"}`,
+			wantIs:      github.ErrValidation,
+			wantMessage: strings.Repeat("x", 8<<10),
+		},
+		{
+			name:     "error body over the error read limit is truncated",
 			status:   http.StatusServiceUnavailable,
 			body:     `{"message":"` + strings.Repeat("x", 200<<10) + `"}`,
 			wantIs:   github.ErrServer,
@@ -722,5 +732,26 @@ func TestClientDoesNotPrintToken(t *testing.T) {
 		if strings.Contains(out, "supersecret") {
 			t.Errorf("%s output contains the token: %s", format, out)
 		}
+	}
+}
+
+func TestTimeoutWhileReadingBody(t *testing.T) {
+	t.Parallel()
+
+	// The server sends the status and part of the body, then stalls. The
+	// per-request timeout covers reading the body, not just the headers.
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"id": 1, "name": "wid`)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}, github.WithTimeout(50*time.Millisecond))
+
+	_, err := c.GetRepository(t.Context(), "acme", "widgets")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context.DeadlineExceeded", err)
+	}
+	if !strings.Contains(err.Error(), "read response") {
+		t.Errorf("error = %q, want it to say the body read failed", err)
 	}
 }
