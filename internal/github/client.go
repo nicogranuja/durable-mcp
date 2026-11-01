@@ -190,7 +190,7 @@ func (c *Client) endpoint(elem ...string) *url.URL {
 }
 
 // get performs a GET request and returns the response if the status is 2xx.
-// Any other status is converted to an *APIError.
+// Any other status is converted to a *RateLimitError or an *APIError.
 func (c *Client) get(ctx context.Context, u *url.URL) (*response, error) {
 	if c.timeout > 0 {
 		var cancel context.CancelFunc
@@ -221,9 +221,9 @@ func (c *Client) get(ctx context.Context, u *url.URL) (*response, error) {
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		// The error body is best effort: a truncated or unreadable body
-		// still produces an APIError with the status code.
+		// still produces an error with the status code.
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
-		return nil, newAPIError(resp, body)
+		return nil, responseError(resp, body, time.Now())
 	}
 
 	body, err := readLimited(resp.Body, c.maxResponseBytes)

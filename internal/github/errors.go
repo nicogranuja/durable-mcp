@@ -29,6 +29,9 @@ var (
 	// ErrServer matches 5xx responses, which are usually transient.
 	ErrServer = errors.New("github: server error")
 
+	// ErrRateLimited matches every *RateLimitError, primary or secondary.
+	ErrRateLimited = errors.New("github: rate limited")
+
 	// ErrResponseTooLarge is returned when a successful response body
 	// exceeds the limit set with WithMaxResponseBytes.
 	ErrResponseTooLarge = errors.New("github: response too large")
@@ -38,7 +41,8 @@ var (
 	ErrInvalidArgument = errors.New("github: invalid argument")
 )
 
-// APIError describes a non-2xx response from the GitHub API.
+// APIError describes a non-2xx response from the GitHub API that is not a
+// rate limit. Rate limits are reported as *RateLimitError instead.
 type APIError struct {
 	// StatusCode is the HTTP status code.
 	StatusCode int
