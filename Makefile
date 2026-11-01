@@ -1,4 +1,6 @@
-# Tool versions are pinned so local runs match CI.
+# golangci-lint is pinned so local runs match CI. govulncheck tracks its
+# latest release, as the official action does, so new detection logic
+# arrives without a version bump.
 GOLANGCI_LINT_VERSION ?= v2.15.0
 
 # Override with a locally installed binary, e.g. `make lint GOLANGCI_LINT=golangci-lint`.
