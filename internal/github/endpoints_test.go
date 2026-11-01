@@ -71,8 +71,8 @@ func TestListPullRequests(t *testing.T) {
 			name: "state, sort, and direction",
 			opts: github.PullRequestListOptions{
 				State:       github.StateAll,
-				Sort:        "updated",
-				Direction:   "desc",
+				Sort:        github.SortUpdated,
+				Direction:   github.Descending,
 				ListOptions: github.ListOptions{PerPage: 30},
 			},
 			wantQuery: "direction=desc&per_page=30&sort=updated&state=all",
@@ -218,6 +218,46 @@ func TestListMethodsValidateRepo(t *testing.T) {
 				if err := tt.call(args[0], args[1]); !errors.Is(err, github.ErrInvalidArgument) {
 					t.Errorf("%s(%q, %q) error = %v, want ErrInvalidArgument", tt.name, args[0], args[1], err)
 				}
+			}
+		})
+	}
+}
+
+func TestListOptionsValidation(t *testing.T) {
+	t.Parallel()
+
+	c, err := github.New(testToken)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"issue state", func() error {
+			_, err := c.ListIssues("acme", "widgets", github.IssueListOptions{State: "merged"})
+			return err
+		}},
+		{"pull request state", func() error {
+			_, err := c.ListPullRequests("acme", "widgets", github.PullRequestListOptions{State: "merged"})
+			return err
+		}},
+		{"pull request sort", func() error {
+			_, err := c.ListPullRequests("acme", "widgets", github.PullRequestListOptions{Sort: "newest"})
+			return err
+		}},
+		{"pull request direction", func() error {
+			_, err := c.ListPullRequests("acme", "widgets", github.PullRequestListOptions{Direction: "up"})
+			return err
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if err := tt.call(); !errors.Is(err, github.ErrInvalidArgument) {
+				t.Errorf("error = %v, want ErrInvalidArgument", err)
 			}
 		})
 	}

@@ -2,6 +2,7 @@ package github
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"time"
 )
@@ -15,6 +16,16 @@ const (
 	StateClosed State = "closed"
 	StateAll    State = "all"
 )
+
+// validate reports an error unless s is empty or one of the State constants.
+func (s State) validate() error {
+	switch s {
+	case "", StateOpen, StateClosed, StateAll:
+		return nil
+	default:
+		return fmt.Errorf("%w: unknown state %q", ErrInvalidArgument, string(s))
+	}
+}
 
 // Label is an issue or pull request label.
 type Label struct {
@@ -62,6 +73,9 @@ type IssueListOptions struct {
 // No request is made until the first call to NextPage or All.
 func (c *Client) ListIssues(owner, repo string, opts IssueListOptions) (*Pager[Issue], error) {
 	if err := validateRepo(owner, repo); err != nil {
+		return nil, err
+	}
+	if err := opts.State.validate(); err != nil {
 		return nil, err
 	}
 	q := url.Values{}
