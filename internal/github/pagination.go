@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -177,6 +178,15 @@ func (p *Pager[T]) All(ctx context.Context) iter.Seq2[T, error] {
 			}
 		}
 	}
+}
+
+// decodeList decodes a page that is a plain JSON array of T.
+func decodeList[T any](body []byte) ([]T, error) {
+	var items []T
+	if err := json.Unmarshal(body, &items); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 // parseCursor validates a cursor from a caller. It must be an absolute URL
