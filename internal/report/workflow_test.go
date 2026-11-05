@@ -197,11 +197,19 @@ func TestRepositoryReportStopsAtThePageLimit(t *testing.T) {
 func TestRepositoryReportRejectsInvalidRequests(t *testing.T) {
 	t.Parallel()
 
+	var requests atomic.Int32
 	env := newWorkflowEnv(t)
+	report.Register(env, newActivities(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		fakeRepository(issuesOK).ServeHTTP(w, r)
+	})))
+
 	env.ExecuteWorkflow(report.RepositoryReport, report.Request{Owner: "acme", Repo: "widgets", Since: window.Until, Until: window.Since})
 
 	assertFailed(t, env, report.ErrorTypeInvalidRequest)
-	env.AssertActivityNumberOfCalls(t, "FetchRepository", 0)
+	if n := requests.Load(); n != 0 {
+		t.Errorf("GitHub got %d requests, want none for an invalid request", n)
+	}
 }
 
 // assertFailed checks that the workflow failed with a non-retryable

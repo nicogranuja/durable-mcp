@@ -10,6 +10,7 @@ import (
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 
@@ -190,6 +191,83 @@ func TestActivitiesHeartbeatProgress(t *testing.T) {
 	defer mu.Unlock()
 	if want := (details{Resource: "issues", Page: 3}); len(got) == 0 || got[0] != want {
 		t.Errorf("heartbeats = %+v, want the first to be %+v", got, want)
+	}
+}
+
+// heartbeatRecorder is a worker interceptor that records every heartbeat
+// an activity records, before the SDK batches them for the server.
+type heartbeatRecorder struct {
+	interceptor.WorkerInterceptorBase
+
+	mu    sync.Mutex
+	calls map[string]int // by activity type
+}
+
+func (r *heartbeatRecorder) InterceptActivity(_ context.Context, next interceptor.ActivityInboundInterceptor) interceptor.ActivityInboundInterceptor {
+	in := &heartbeatInbound{rec: r}
+	in.Next = next
+	return in
+}
+
+func (r *heartbeatRecorder) count(activityType string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls[activityType]
+}
+
+type heartbeatInbound struct {
+	interceptor.ActivityInboundInterceptorBase
+	rec *heartbeatRecorder
+}
+
+func (in *heartbeatInbound) Init(outbound interceptor.ActivityOutboundInterceptor) error {
+	out := &heartbeatOutbound{rec: in.rec}
+	out.Next = outbound
+	return in.Next.Init(out)
+}
+
+type heartbeatOutbound struct {
+	interceptor.ActivityOutboundInterceptorBase
+	rec *heartbeatRecorder
+}
+
+func (out *heartbeatOutbound) RecordHeartbeat(ctx context.Context, details ...any) {
+	out.rec.mu.Lock()
+	out.rec.calls[activity.GetInfo(ctx).ActivityType.Name]++
+	out.rec.mu.Unlock()
+	out.Next.RecordHeartbeat(ctx, details...)
+}
+
+// An activity keeps heartbeating while a slow request is in flight, not just
+// before it. With the workflow's 10-second heartbeat timeout it records one
+// every 2.5 seconds.
+func TestActivitiesHeartbeatDuringSlowRequests(t *testing.T) {
+	t.Parallel()
+
+	slowIssues := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(3 * time.Second):
+		case <-r.Context().Done():
+			return
+		}
+		issuesOK(w, r)
+	})
+	rec := &heartbeatRecorder{calls: map[string]int{}}
+	env := newWorkflowEnv(t)
+	env.SetTestTimeout(30 * time.Second) // the default, 3 seconds, is the request's length
+	env.SetWorkerOptions(worker.Options{Interceptors: []interceptor.WorkerInterceptor{rec}})
+	report.Register(env, newActivities(t, fakeRepository(slowIssues)))
+
+	env.ExecuteWorkflow(report.RepositoryReport, request)
+
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow failed: %v", err)
+	}
+	if n := rec.count("FetchIssuesPage"); n < 2 {
+		t.Errorf("FetchIssuesPage recorded %d heartbeats during a 3-second request, want at least 2", n)
+	}
+	if n := rec.count("FetchCommitsPage"); n != 1 {
+		t.Errorf("FetchCommitsPage recorded %d heartbeats during a fast request, want 1", n)
 	}
 }
 
