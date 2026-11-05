@@ -69,7 +69,9 @@ type PageCounts struct {
 	Commits      int `json:"commits"`
 }
 
-// finish records how the report ended.
+// finish records how the report ended. It must stay free of side effects
+// such as logging: it is deferred, so it also runs, with a nil error, when
+// the SDK evicts the workflow from its cache.
 func (p *Progress) finish(err error) {
 	switch {
 	case err == nil:

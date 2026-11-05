@@ -52,7 +52,7 @@ durable-mcp worker ── polls the "durable-mcp" task queue on Temporal
   never the raw issues, so workflow history grows with the number of pages, not with the data.
 - **Rate limits are durable waits.** A rate-limited activity fails with a retry delay set to GitHub's reset time. The
   Temporal server holds the wait, so no worker is tied up and a restart loses nothing. Missing repositories, bad tokens,
-  and other 4xx errors are not retried; 5xx and network errors are, with exponential backoff.
+  and similar 4xx errors are not retried; 5xx and network errors are, with exponential backoff.
 - **Progress and cancellation.** The `progress` query reports the phase and pages fetched so far. Canceling the workflow
   cancels the activity in flight, which notices through its heartbeat and aborts its request.
 

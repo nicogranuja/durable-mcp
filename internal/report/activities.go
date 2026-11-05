@@ -183,8 +183,9 @@ const defaultHeartbeatInterval = 10 * time.Second
 // reasons. The SDK sends at most one heartbeat per throttle interval (80% of
 // the heartbeat timeout) and only if one was recorded since the last send,
 // so a single heartbeat before a slow request would let the activity time
-// out. And Temporal delivers a cancellation to an activity only in the
-// response to a heartbeat; when it arrives, the SDK cancels ctx, which
+// out. And heartbeat responses are how Temporal reliably tells a running
+// activity that it was canceled (newer servers can also push the
+// cancellation to the worker); when it arrives, the SDK cancels ctx, which
 // aborts the request.
 func withHeartbeat[T any](ctx context.Context, details heartbeat, fn func() (T, error)) (T, error) {
 	activity.RecordHeartbeat(ctx, details)

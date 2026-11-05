@@ -38,10 +38,11 @@
 // because the server records only an activity's final attempt.
 //
 // Request.MaxPages bounds the pages per resource, at most MaxPagesLimit, so
-// a report stays under about 5,400 events and a few megabytes, far below
-// Temporal's default history limits (a warning at 10,240 events, and
-// termination at 51,200). The workflow does not need continue-as-new. A
-// resource with more pages is reported as truncated.
+// a report has at most about 3,600 events and 2 MB of history. That is below
+// the 4,096 events at which the Temporal server suggests continue-as-new by
+// default, and far below the limits at which it warns (10,240 events) and
+// terminates a run (51,200), so the workflow does not need continue-as-new.
+// A resource with more pages is reported as truncated.
 //
 // Adding partials is commutative and the final report sorts everything it
 // lists, so the result does not depend on the order pages arrive in.
@@ -58,12 +59,17 @@
 //     no worker slot or goroutine is held, it survives worker restarts, and
 //     the pending activity shows the attempt, the rate-limit failure, and
 //     when the next attempt is due. Secondary rate limits wait at least a
-//     backoff that doubles per attempt, as GitHub asks.
-//   - 401, 403, 404, 422, and other 4xx responses, invalid arguments, and
-//     oversized pages are non-retryable: the same request cannot succeed,
-//     so the report fails at once with a type that says why.
+//     backoff that doubles with each attempt at the page, as GitHub asks.
+//   - 401, 403, 404, 422, and other 4xx responses except 408, invalid
+//     arguments, and oversized pages are non-retryable: the same request
+//     cannot succeed, so the report fails at once with a type that says
+//     why.
 //   - 5xx responses and network errors are retried with the retry policy's
 //     exponential backoff.
+//
+// NextRetryDelay needs Temporal Server 1.24.2 or later. An older server
+// ignores it and retries a rate-limited page on the retry policy's backoff
+// instead, which wastes requests while the limit lasts.
 //
 // Every activity uses the same options, chosen for an activity that makes
 // one request:
@@ -89,9 +95,10 @@
 //
 // Activities heartbeat with their resource and page while their request is
 // in flight. That is what lets Temporal notice a lost worker within the
-// heartbeat timeout, and it is how a cancellation reaches the activity:
-// Temporal delivers it in a heartbeat response, and the SDK then cancels the
-// activity's context, which aborts the request.
+// heartbeat timeout, and it is how a cancellation reliably reaches the
+// activity: Temporal reports it in a heartbeat response (newer servers can
+// also push it to the worker), and the SDK then cancels the activity's
+// context, which aborts the request.
 //
 // Canceling the workflow cancels the activity in flight and ends the run as
 // canceled. The workflow does not wait for the activity to acknowledge the

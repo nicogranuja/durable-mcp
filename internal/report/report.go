@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// The workflow's decisions depend on these values, so changing one while
+// reports are running can make their replays diverge from their histories.
+// Guard such a change with workflow.GetVersion.
 const (
 	// DefaultWindow is how far back a report looks when the request does not
 	// set Since.
@@ -23,7 +26,7 @@ const (
 	// MaxPagesLimit is the largest MaxPages a request may ask for. Every page
 	// adds a fixed handful of events to the workflow history, so this caps
 	// the history of one report; see the package documentation.
-	MaxPagesLimit = 300
+	MaxPagesLimit = 200
 
 	// TopContributors is how many contributors a report lists.
 	TopContributors = 10
@@ -55,7 +58,7 @@ func (r Request) resolve(now time.Time) (Window, int, error) {
 		return Window{}, 0, errors.New("owner and repo are required")
 	}
 	if r.MaxPages < 0 || r.MaxPages > MaxPagesLimit {
-		return Window{}, 0, fmt.Errorf("max pages must be between 1 and %d, got %d", MaxPagesLimit, r.MaxPages)
+		return Window{}, 0, fmt.Errorf("max pages must be from 1 to %d, or 0 for the default, got %d", MaxPagesLimit, r.MaxPages)
 	}
 	maxPages := r.MaxPages
 	if maxPages == 0 {

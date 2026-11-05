@@ -77,8 +77,8 @@ func TestResolve(t *testing.T) {
 			req:     Request{Owner: "acme", Repo: "widgets", Since: window.Until.Add(-MaxWindow - time.Second), Until: window.Until},
 			wantErr: "must not be longer than 366 days",
 		},
-		{name: "negative max pages", req: Request{Owner: "acme", Repo: "widgets", MaxPages: -1}, wantErr: "max pages must be between"},
-		{name: "too many pages", req: Request{Owner: "acme", Repo: "widgets", MaxPages: MaxPagesLimit + 1}, wantErr: "max pages must be between"},
+		{name: "negative max pages", req: Request{Owner: "acme", Repo: "widgets", MaxPages: -1}, wantErr: "max pages must be from 1 to 200"},
+		{name: "too many pages", req: Request{Owner: "acme", Repo: "widgets", MaxPages: MaxPagesLimit + 1}, wantErr: "max pages must be from 1 to 200"},
 	}
 
 	for _, tt := range tests {
