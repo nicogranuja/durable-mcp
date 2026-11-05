@@ -15,7 +15,10 @@
 // [ErrServer], [ErrRateLimited]) and use [errors.As] to read the details.
 // Transport failures, including context cancellation and timeouts, are
 // wrapped so that errors.Is(err, context.Canceled) and
-// errors.Is(err, context.DeadlineExceeded) work as expected.
+// errors.Is(err, context.DeadlineExceeded) work as expected. A context
+// canceled with a cause (context.WithCancelCause) is the exception: net/http
+// reports the cause instead, so the error wraps that, as it does when the
+// Temporal SDK cancels an activity.
 //
 // # Rate limits
 //
