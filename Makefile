@@ -1,11 +1,13 @@
-# golangci-lint is pinned so local runs match CI. govulncheck tracks its
-# latest release, as the official action does, so new detection logic
-# arrives without a version bump.
+# golangci-lint and workflowcheck are pinned so local runs match CI.
+# govulncheck tracks its latest release, as the official action does, so new
+# detection logic arrives without a version bump.
 GOLANGCI_LINT_VERSION ?= v2.15.0
+WORKFLOWCHECK_VERSION ?= v0.6.0
 
 # Override with a locally installed binary, e.g. `make lint GOLANGCI_LINT=golangci-lint`.
 GOLANGCI_LINT ?= go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 GOVULNCHECK   ?= go run golang.org/x/vuln/cmd/govulncheck@latest
+WORKFLOWCHECK ?= go run go.temporal.io/sdk/contrib/tools/workflowcheck@$(WORKFLOWCHECK_VERSION)
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
@@ -13,7 +15,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 .DEFAULT_GOAL := check
 
 .PHONY: check
-check: vet test lint ## Run vet, tests, and lint (what CI runs, minus govulncheck)
+check: vet test lint workflowcheck ## Run vet, tests, lint, and workflowcheck (what CI runs, minus govulncheck)
 
 .PHONY: build
 build: ## Build the durable-mcp binary into ./bin
@@ -36,6 +38,10 @@ vet: ## Run go vet
 lint: ## Run golangci-lint
 	$(GOLANGCI_LINT) run
 
+.PHONY: workflowcheck
+workflowcheck: ## Check Temporal workflows for non-deterministic code
+	$(WORKFLOWCHECK) ./...
+
 .PHONY: vuln
 vuln: ## Scan dependencies and the standard library for known vulnerabilities
 	$(GOVULNCHECK) ./...
@@ -50,4 +56,4 @@ clean: ## Remove build and coverage output
 
 .PHONY: help
 help: ## List available targets
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-8s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'

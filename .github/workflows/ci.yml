@@ -59,6 +59,10 @@ jobs:
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.15.0 # keep in sync with GOLANGCI_LINT_VERSION in the Makefile
+      # Static check that workflow code avoids clocks, randomness, I/O, and
+      # map iteration, which can break replay. Pinned in the Makefile.
+      - name: workflowcheck
+        run: make workflowcheck
 
   govulncheck:
     runs-on: ubuntu-latest
