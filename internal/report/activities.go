@@ -71,7 +71,7 @@ func (a *Activities) FetchRepository(ctx context.Context, req RepositoryRequest)
 		return a.github.GetRepository(ctx, req.Owner, req.Repo)
 	})
 	if err != nil {
-		return Repository{}, err
+		return Repository{}, activityError(ctx, err)
 	}
 	return Repository{
 		FullName:      r.FullName,
@@ -93,11 +93,11 @@ func (a *Activities) FetchIssuesPage(ctx context.Context, req PageRequest) (Page
 		ListOptions: github.ListOptions{Cursor: req.Cursor},
 	})
 	if err != nil {
-		return Page[IssueStats]{}, err
+		return Page[IssueStats]{}, activityError(ctx, err)
 	}
 	issues, err := fetchPage(ctx, pager, resourceIssues, req.Page)
 	if err != nil {
-		return Page[IssueStats]{}, err
+		return Page[IssueStats]{}, activityError(ctx, err)
 	}
 	return Page[IssueStats]{Stats: pageIssueStats(issues, req.Window), Next: pager.Cursor()}, nil
 }
@@ -114,11 +114,11 @@ func (a *Activities) FetchPullRequestsPage(ctx context.Context, req PageRequest)
 		ListOptions: github.ListOptions{Cursor: req.Cursor},
 	})
 	if err != nil {
-		return Page[PullRequestStats]{}, err
+		return Page[PullRequestStats]{}, activityError(ctx, err)
 	}
 	prs, err := fetchPage(ctx, pager, resourcePullRequests, req.Page)
 	if err != nil {
-		return Page[PullRequestStats]{}, err
+		return Page[PullRequestStats]{}, activityError(ctx, err)
 	}
 	stats, pastWindow := pagePullRequestStats(prs, req.Window)
 	next := pager.Cursor()
@@ -137,7 +137,7 @@ func (a *Activities) FetchCommitsPage(ctx context.Context, req PageRequest) (Pag
 		ListOptions: github.ListOptions{Cursor: req.Cursor},
 	})
 	if err != nil {
-		return Page[CommitStats]{}, err
+		return Page[CommitStats]{}, activityError(ctx, err)
 	}
 	commits, err := fetchPage(ctx, pager, resourceCommits, req.Page)
 	if apiErr, ok := errors.AsType[*github.APIError](err); ok && apiErr.StatusCode == http.StatusConflict {
@@ -145,13 +145,14 @@ func (a *Activities) FetchCommitsPage(ctx context.Context, req PageRequest) (Pag
 		return Page[CommitStats]{}, nil
 	}
 	if err != nil {
-		return Page[CommitStats]{}, err
+		return Page[CommitStats]{}, activityError(ctx, err)
 	}
 	return Page[CommitStats]{Stats: pageCommitStats(commits, req.Window), Next: pager.Cursor()}, nil
 }
 
 // fetchPage fetches the pager's next page, heartbeating while the request
-// is in flight.
+// is in flight. It returns the client's errors unchanged; callers convert
+// them with activityError.
 func fetchPage[T any](ctx context.Context, p *github.Pager[T], resource string, page int) ([]T, error) {
 	items, err := withHeartbeat(ctx, heartbeat{Resource: resource, Page: page}, func() ([]T, error) {
 		return p.NextPage(ctx)
