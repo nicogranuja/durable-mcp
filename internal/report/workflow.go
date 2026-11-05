@@ -110,7 +110,8 @@ func activityOptions() workflow.ActivityOptions {
 // commits in turn, one activity per page, and adds up the pages' partial
 // aggregates as they arrive. Resources are fetched one after another, not
 // in parallel, because GitHub counts concurrent requests from one token
-// against its secondary rate limit.
+// against its secondary rate limit. Reports running at the same time share
+// the worker's token, so the worker also caps its concurrent activities.
 //
 // The ProgressQuery query reports how far it has got. Canceling the
 // workflow cancels the activity in flight and ends the report in

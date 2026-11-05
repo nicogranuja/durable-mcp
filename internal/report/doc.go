@@ -21,7 +21,9 @@
 //
 // Resources are fetched one after another rather than in parallel: GitHub
 // counts concurrent requests from one token against its secondary rate
-// limit, and a report is not latency sensitive.
+// limit, and a report is not latency sensitive. Concurrent reports share
+// the worker's token, so the worker command also caps how many activities
+// it runs at once.
 //
 // # History size
 //

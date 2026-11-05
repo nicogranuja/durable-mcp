@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/log"
@@ -16,10 +17,20 @@ import (
 	"github.com/nicogranuja/durable-mcp/internal/report"
 )
 
-// workerStopTimeout is how long a stopping worker lets running activities
-// finish. It matches the GitHub client's request timeout, so a page that is
-// being fetched can complete instead of being retried elsewhere.
-const workerStopTimeout = github.DefaultTimeout
+const (
+	// maxConcurrentActivities caps how many GitHub requests one worker makes
+	// at once. Every report on a worker shares its token, and GitHub counts
+	// concurrent requests from one token against its secondary rate limit.
+	// A report fetches its pages one at a time; this keeps many reports at
+	// once from adding up to a burst.
+	maxConcurrentActivities = 4
+
+	// workerStopTimeout is how long a stopping worker lets running
+	// activities finish. It matches the activities' start-to-close timeout,
+	// so a page being fetched can complete instead of being retried
+	// elsewhere.
+	workerStopTimeout = time.Minute
+)
 
 // workerConfig is the worker's configuration, from flags and the
 // environment.
@@ -135,7 +146,10 @@ func serveWorker(ctx context.Context, cfg workerConfig, logger *slog.Logger) err
 	}
 	defer c.Close()
 
-	w := worker.New(c, cfg.taskQueue, worker.Options{WorkerStopTimeout: workerStopTimeout})
+	w := worker.New(c, cfg.taskQueue, worker.Options{
+		MaxConcurrentActivityExecutionSize: maxConcurrentActivities,
+		WorkerStopTimeout:                  workerStopTimeout,
+	})
 	report.Register(w, report.NewActivities(gh))
 
 	// Run stops the worker when interrupt is closed, which happens when ctx
