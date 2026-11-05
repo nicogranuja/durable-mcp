@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -77,13 +78,29 @@ func (p *Progress) finish(err error) {
 		p.Phase = PhaseCanceled
 	default:
 		p.Phase = PhaseFailed
-		p.Error = err.Error()
-		// Prefer the innermost application error, which names its type,
-		// to the activity error wrapped around it.
-		if appErr, ok := errors.AsType[*temporal.ApplicationError](err); ok {
-			p.Error = appErr.Error()
+		p.Error = failureMessage(err)
+	}
+}
+
+// failureMessage describes the error that ended a report: the application
+// error or timeout that caused it, which names its type, and why Temporal
+// stopped retrying, rather than the activity error wrapped around them.
+func failureMessage(err error) string {
+	msg := err.Error()
+	if appErr, ok := errors.AsType[*temporal.ApplicationError](err); ok {
+		msg = appErr.Error()
+	} else if timeoutErr, ok := errors.AsType[*temporal.TimeoutError](err); ok {
+		msg = timeoutErr.Error()
+	}
+	if actErr, ok := errors.AsType[*temporal.ActivityError](err); ok {
+		switch actErr.RetryState() {
+		case enumspb.RETRY_STATE_MAXIMUM_ATTEMPTS_REACHED:
+			msg += "; gave up after the maximum number of attempts"
+		case enumspb.RETRY_STATE_TIMEOUT:
+			msg += "; gave up when the schedule-to-close timeout ran out"
 		}
 	}
+	return msg
 }
 
 // activityOptions returns the options for every report activity. Each
