@@ -3,6 +3,7 @@ package report
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -24,7 +25,7 @@ const (
 	// ErrorTypeUnavailable means GitHub answered with a 5xx status or the
 	// request failed in transit. The activity is retried with exponential
 	// backoff.
-	ErrorTypeUnavailable = "GitHubUnavailable"
+	ErrorTypeUnavailable = "Unavailable"
 
 	// ErrorTypeUnauthorized means GitHub rejected the token (401): it is
 	// missing, invalid, or expired. Not retried.
@@ -43,8 +44,9 @@ const (
 	ErrorTypeValidationFailed = "ValidationFailed"
 
 	// ErrorTypeRequestRejected means GitHub answered with another 4xx
-	// status, such as 410 for a repository with issues turned off. Not
-	// retried.
+	// status, such as 451 for a repository blocked for legal reasons. Not
+	// retried. 408 Request Timeout is the exception: it is retried as
+	// ErrorTypeUnavailable.
 	ErrorTypeRequestRejected = "RequestRejected"
 
 	// ErrorTypeResponseTooLarge means a page was larger than the client's
@@ -75,8 +77,9 @@ const (
 //     GitHub said the limit resets. The server waits that long before the
 //     next attempt, durably: no worker holds a slot or a goroutine while it
 //     waits, and the wait survives worker restarts.
-//   - A 4xx response, an invalid argument, or an oversized page is
-//     non-retryable, because repeating the same request cannot succeed.
+//   - A 4xx response other than 408, an invalid argument, or an oversized
+//     page is non-retryable, because repeating the same request cannot
+//     succeed.
 //   - Anything else, such as a 5xx response or a network error, is
 //     retryable with the retry policy's exponential backoff.
 func activityError(ctx context.Context, err error) error {
@@ -84,9 +87,14 @@ func activityError(ctx context.Context, err error) error {
 		return nil
 	}
 	if ctx.Err() != nil {
-		// The activity was canceled or timed out, which aborted the
-		// request. Return the error as it is: the SDK reports an error
-		// wrapping context.Canceled as a cancellation.
+		// The activity's context ended, which aborted the request: Temporal
+		// canceled the activity, its timeout passed, or the worker is
+		// stopping. Report the context's cause, so that the SDK reports a
+		// cancellation by Temporal (a *temporal.CanceledError cause) as a
+		// cancellation, whatever the aborted request returned.
+		if cause := context.Cause(ctx); !errors.Is(err, cause) {
+			return fmt.Errorf("%w: %w", cause, err)
+		}
 		return err
 	}
 
@@ -136,8 +144,9 @@ func nonRetryableType(err error) (string, bool) {
 //
 // The wait comes from rl.RetryAt, which the client measured against
 // GitHub's clock. For a secondary rate limit it is at least a backoff that
-// doubles with each attempt, because GitHub asks integrations that keep
-// hitting secondary limits to wait longer each time, or risk being blocked.
+// doubles with each attempt at the same page, because GitHub asks
+// integrations that keep hitting secondary limits to wait longer each time,
+// or risk being blocked.
 func rateLimitDelay(rl *github.RateLimitError, attempt int32, now time.Time) time.Duration {
 	delay := rl.RetryAt.Sub(now)
 	if rl.Kind == github.SecondaryRateLimit {

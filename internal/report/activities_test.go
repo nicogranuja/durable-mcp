@@ -4,13 +4,13 @@ import (
 	"context"
 	"net/http"
 	"reflect"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 
 	"github.com/nicogranuja/durable-mcp/internal/report"
@@ -193,35 +193,55 @@ func TestActivitiesHeartbeatProgress(t *testing.T) {
 	}
 }
 
-// When Temporal cancels an activity, the SDK cancels its context. The
-// request in flight must stop then, rather than run to its own timeout.
-func TestActivityStopsWhenCanceled(t *testing.T) {
+// The SDK cancels an activity's context when Temporal cancels the activity,
+// with a *temporal.CanceledError cause, and when the worker shuts down. The
+// request in flight must stop then, rather than run to its own timeout, and
+// only Temporal's cancellation may be reported as one.
+func TestActivityStopsWhenItsContextIsCanceled(t *testing.T) {
 	t.Parallel()
 
-	started := make(chan struct{})
-	var once sync.Once
-	acts := newActivities(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		once.Do(func() { close(started) })
-		select {
-		case <-r.Context().Done():
-		case <-time.After(10 * time.Second):
-		}
-	}))
-	env := newActivityEnv(t, acts)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	env.SetWorkerOptions(worker.Options{BackgroundActivityContext: ctx})
-
-	go func() {
-		<-started
-		cancel()
-	}()
-	begin := time.Now()
-	_, err := env.ExecuteActivity(acts.FetchIssuesPage, pageRequest("", 1))
-	if err == nil || !strings.Contains(err.Error(), "context canceled") {
-		t.Fatalf("ExecuteActivity() error = %v, want a cancellation", err)
+	tests := []struct {
+		name         string
+		cause        error
+		wantCanceled bool
+	}{
+		{name: "canceled by Temporal", cause: temporal.NewCanceledError(), wantCanceled: true},
+		{name: "worker shutting down", cause: context.Canceled},
 	}
-	if elapsed := time.Since(begin); elapsed > 5*time.Second {
-		t.Errorf("activity took %s to stop after cancellation", elapsed)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			started := make(chan struct{})
+			var once sync.Once
+			acts := newActivities(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				once.Do(func() { close(started) })
+				select {
+				case <-r.Context().Done():
+				case <-time.After(10 * time.Second):
+				}
+			}))
+			env := newActivityEnv(t, acts)
+			// The activity's context derives from this one, so canceling it
+			// with a cause stands in for the SDK canceling the activity.
+			ctx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			env.SetWorkerOptions(worker.Options{BackgroundActivityContext: ctx})
+
+			go func() {
+				<-started
+				cancel(tt.cause)
+			}()
+			begin := time.Now()
+			_, err := env.ExecuteActivity(acts.FetchIssuesPage, pageRequest("", 1))
+			if elapsed := time.Since(begin); elapsed > 5*time.Second {
+				t.Errorf("activity took %s to stop after its context was canceled", elapsed)
+			}
+			if err == nil {
+				t.Fatal("ExecuteActivity() succeeded, want it to stop with an error")
+			}
+			if got := temporal.IsCanceledError(err); got != tt.wantCanceled {
+				t.Errorf("ExecuteActivity() error = %v; reported as canceled = %v, want %v", err, got, tt.wantCanceled)
+			}
+		})
 	}
 }
