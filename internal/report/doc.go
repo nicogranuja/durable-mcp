@@ -14,10 +14,10 @@
 // mid-report loses at most the page it was fetching.
 //
 // The workflow decides what to fetch next and adds up the results. It has
-// no I/O, clock, or randomness of its own: the default window ends at
-// workflow.Now, the time recorded in history when the run started, and the
-// code that combines pages never ranges over a map. A replay therefore makes
-// the same decisions.
+// no I/O, clock, or randomness of its own: the default window ends at the
+// run's start time, as recorded in its history, and the code that combines
+// pages never ranges over a map. A replay therefore makes the same
+// decisions.
 //
 // Resources are fetched one after another rather than in parallel: GitHub
 // counts concurrent requests from one token against its secondary rate

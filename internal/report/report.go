@@ -36,8 +36,8 @@ type Request struct {
 	Repo  string `json:"repo"`
 
 	// Since and Until bound the report window, [Since, Until). A zero Until
-	// means the time the workflow started, and a zero Since means
-	// DefaultWindow before Until.
+	// means the time the workflow run started, which is when the report was
+	// requested, and a zero Since means DefaultWindow before Until.
 	Since time.Time `json:"since,omitzero"`
 	Until time.Time `json:"until,omitzero"`
 
@@ -48,8 +48,8 @@ type Request struct {
 }
 
 // resolve validates r and returns its window and page limit, filling in
-// defaults. now is the time the workflow started, from workflow.Now, so that
-// a replay computes the same window.
+// defaults relative to now. The workflow passes its run's start time, from
+// its history, so that a replay computes the same window.
 func (r Request) resolve(now time.Time) (Window, int, error) {
 	if r.Owner == "" || r.Repo == "" {
 		return Window{}, 0, errors.New("owner and repo are required")

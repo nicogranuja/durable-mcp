@@ -133,8 +133,7 @@ func queryProgress(t *testing.T, env *testsuite.TestWorkflowEnvironment) report.
 	return p
 }
 
-// The default window ends when the workflow started, as recorded in
-// history, so a replay computes the same window.
+// The default window is the DefaultWindow before the run started.
 func TestRepositoryReportDefaultWindow(t *testing.T) {
 	t.Parallel()
 
