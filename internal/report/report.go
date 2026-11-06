@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/nicogranuja/durable-mcp/internal/github"
 )
 
 // The workflow's decisions depend on these values, so changing one while
@@ -50,10 +52,30 @@ type Request struct {
 	MaxPages int `json:"max_pages,omitempty"`
 }
 
-// resolve validates r and returns its window and page limit, filling in
+// Validate reports whether a report for r can run, as of now: the checks
+// that Resolve makes, and that the RepositoryReport workflow repeats when it
+// starts, plus the owner and repository name checks that the GitHub client
+// makes before every request. A client that starts reports calls it first,
+// so that a bad request fails at once, with a message about the input,
+// instead of as a failed job.
+func (r Request) Validate(now time.Time) error {
+	if _, _, err := r.Resolve(now); err != nil {
+		return err
+	}
+	if github.ValidateRepo(r.Owner, r.Repo) != nil {
+		return fmt.Errorf("%q/%q is not a valid GitHub repository: owner and repo use only letters, digits, '-', '_', and '.', "+
+			"up to 100 characters each, as in github.com/OWNER/REPO", r.Owner, r.Repo)
+	}
+	return nil
+}
+
+// Resolve validates r and returns its window and page limit, filling in
 // defaults relative to now. The workflow passes its run's start time, from
 // its history, so that a replay computes the same window.
-func (r Request) resolve(now time.Time) (Window, int, error) {
+//
+// Resolve does not check the owner and repository names; the first activity
+// does, through the GitHub client. Validate checks both.
+func (r Request) Resolve(now time.Time) (Window, int, error) {
 	if r.Owner == "" || r.Repo == "" {
 		return Window{}, 0, errors.New("owner and repo are required")
 	}

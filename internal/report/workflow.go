@@ -147,7 +147,7 @@ func RepositoryReport(ctx workflow.Context, req Request) (_ Report, err error) {
 
 	// The start time, not workflow.Now: the run may start before any worker
 	// picks it up, and the report covers the time it was requested.
-	window, maxPages, err := req.resolve(workflow.GetInfo(ctx).WorkflowStartTime)
+	window, maxPages, err := req.Resolve(workflow.GetInfo(ctx).WorkflowStartTime)
 	if err != nil {
 		return Report{}, temporal.NewNonRetryableApplicationError(err.Error(), ErrorTypeInvalidRequest, nil)
 	}

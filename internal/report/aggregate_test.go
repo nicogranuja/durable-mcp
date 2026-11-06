@@ -84,15 +84,15 @@ func TestResolve(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			w, maxPages, err := tt.req.resolve(now)
+			w, maxPages, err := tt.req.Resolve(now)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("resolve() error = %v, want it to contain %q", err, tt.wantErr)
+					t.Fatalf("Resolve() error = %v, want it to contain %q", err, tt.wantErr)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("resolve() error = %v", err)
+				t.Fatalf("Resolve() error = %v", err)
 			}
 			if !w.Since.Equal(tt.wantWindow.Since) || !w.Until.Equal(tt.wantWindow.Until) {
 				t.Errorf("window = %v, want %v", w, tt.wantWindow)
@@ -104,6 +104,34 @@ func TestResolve(t *testing.T) {
 				t.Errorf("max pages = %d, want %d", maxPages, tt.wantMaxPages)
 			}
 		})
+	}
+}
+
+func TestValidate(t *testing.T) {
+	t.Parallel()
+
+	now := window.Until
+	tests := []struct {
+		name    string
+		req     Request
+		wantErr string
+	}{
+		{name: "valid", req: Request{Owner: "acme", Repo: "widgets"}},
+		{name: "valid window", req: Request{Owner: "acme", Repo: "widgets.go", Since: window.Since, Until: window.Until}},
+		{name: "missing repo", req: Request{Owner: "acme"}, wantErr: "owner and repo are required"},
+		{name: "bad window", req: Request{Owner: "acme", Repo: "widgets", Since: now}, wantErr: "must be before until"},
+		{name: "path in repo", req: Request{Owner: "acme", Repo: "widgets/issues"}, wantErr: `"acme"/"widgets/issues" is not a valid GitHub repository`},
+		{name: "dot segment", req: Request{Owner: "..", Repo: "widgets"}, wantErr: "is not a valid GitHub repository"},
+		{name: "space", req: Request{Owner: "acme corp", Repo: "widgets"}, wantErr: "is not a valid GitHub repository"},
+	}
+	for _, tt := range tests {
+		err := tt.req.Validate(now)
+		switch {
+		case tt.wantErr == "" && err != nil:
+			t.Errorf("%s: Validate() = %v, want nil", tt.name, err)
+		case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+			t.Errorf("%s: Validate() = %v, want it to contain %q", tt.name, err, tt.wantErr)
+		}
 	}
 }
 
