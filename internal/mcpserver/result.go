@@ -83,7 +83,7 @@ func (t *tools) jobResult(ctx context.Context, _ *mcp.CallToolRequest, in JobInp
 	err = t.client.GetWorkflow(getCtx, in.JobID, runID).
 		GetWithOptions(getCtx, &r, client.WorkflowRunGetOptions{DisableFollowingRuns: true})
 	if err == nil {
-		out.Status = statusCompleted
+		out.Status = statusCompleted // a failed run never returns a report
 		out.Report = &r
 		out.Message = "The job completed; the report is in report."
 		return nil, out, nil
@@ -92,7 +92,14 @@ func (t *tools) jobResult(ctx context.Context, _ *mcp.CallToolRequest, in JobInp
 		// Not the job's failure: the call to Temporal failed.
 		return nil, JobResultOutput{}, t.temporalError(getCtx, "job_result", in.JobID, err)
 	}
-	out.Status = statusFailed
+	if out.Status == statusCompleted {
+		// The job succeeded, but its result does not decode as a Report,
+		// as when the worker runs a different version of the report.
+		t.logger.Error("Completed job's result does not decode", "JobID", in.JobID, "Error", err)
+		return nil, JobResultOutput{}, fmt.Errorf("job_result: the job completed, but its report could not be read; "+
+			"the durable-mcp server and worker may be running different versions. Retrying will not help; "+
+			"tell the user, with the job ID %s", in.JobID)
+	}
 	out.Failure = classify(err)
 	out.Message = "The job failed: " + out.Failure.Message + ". " + nextStep(out.Failure.Type)
 	return nil, out, nil

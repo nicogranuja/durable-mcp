@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -171,5 +172,19 @@ func TestJobResultTemporalError(t *testing.T) {
 	_, out, err := newTools(f).jobResult(t.Context(), nil, JobInput{JobID: testJobID})
 	if err == nil || !strings.Contains(err.Error(), "job_result: the job service (Temporal) did not respond") {
 		t.Errorf("jobResult() = %s, %v; want a tool error about Temporal", mustJSON(out), err)
+	}
+}
+
+func TestJobResultUndecodable(t *testing.T) {
+	t.Parallel()
+
+	f := newFakeClient()
+	f.add(testJobID, enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED)
+	// What the SDK returns when the payload does not fit a Report.
+	f.getErr = errors.New("unable to decode argument: 0, *report.Report, with json/plain converter")
+
+	_, out, err := newTools(f).jobResult(t.Context(), nil, JobInput{JobID: testJobID})
+	if err == nil || !strings.Contains(err.Error(), "the job completed, but its report could not be read") {
+		t.Errorf("jobResult() = %s, %v; want a tool error, not a failed job", mustJSON(out), err)
 	}
 }

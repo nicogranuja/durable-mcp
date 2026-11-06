@@ -188,9 +188,10 @@ func stepStatus(a *workflowpb.PendingActivityInfo) *StepStatus {
 	return s
 }
 
-// failureOf describes a failure from Temporal: the innermost application
-// error's type and message, which say why GitHub or the activity failed.
-// Stack traces are left out.
+// failureOf describes a failure from Temporal: the type and message of the
+// first application error or timeout in its cause chain. For an activity's
+// last failure, that is the error the activity returned, which says why
+// GitHub or the request failed. Stack traces are left out.
 func failureOf(f *failurepb.Failure) *Failure {
 	if f == nil {
 		return nil
