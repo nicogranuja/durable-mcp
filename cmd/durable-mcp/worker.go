@@ -35,11 +35,9 @@ const (
 // workerConfig is the worker's configuration, from flags and the
 // environment.
 type workerConfig struct {
-	temporalAddress   string
-	temporalNamespace string
-	taskQueue         string
-	githubAPIURL      string
-	githubToken       string
+	temporal     temporalConfig
+	githubAPIURL string
+	githubToken  string
 }
 
 // parseWorkerFlags reads the worker's configuration. Each flag defaults to
@@ -47,23 +45,11 @@ type workerConfig struct {
 // Temporal development server. The GitHub token is read only from the
 // environment, so it does not show up in process listings or shell history.
 func parseWorkerFlags(args []string, getenv func(string) string, stderr io.Writer) (workerConfig, error) {
-	envOr := func(key, fallback string) string {
-		if v := getenv(key); v != "" {
-			return v
-		}
-		return fallback
-	}
-
 	cfg := workerConfig{githubToken: getenv("GITHUB_TOKEN")}
 	fs := flag.NewFlagSet("durable-mcp worker", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.StringVar(&cfg.temporalAddress, "temporal-address", envOr("TEMPORAL_ADDRESS", client.DefaultHostPort),
-		"Temporal frontend `host:port` (env TEMPORAL_ADDRESS)")
-	fs.StringVar(&cfg.temporalNamespace, "temporal-namespace", envOr("TEMPORAL_NAMESPACE", client.DefaultNamespace),
-		"Temporal `namespace` (env TEMPORAL_NAMESPACE)")
-	fs.StringVar(&cfg.taskQueue, "task-queue", envOr("DURABLE_MCP_TASK_QUEUE", report.DefaultTaskQueue),
-		"Temporal task `queue` to poll (env DURABLE_MCP_TASK_QUEUE)")
-	fs.StringVar(&cfg.githubAPIURL, "github-api-url", envOr("GITHUB_API_URL", github.DefaultBaseURL),
+	cfg.temporal.register(fs, getenv, "poll")
+	fs.StringVar(&cfg.githubAPIURL, "github-api-url", envOr(getenv, "GITHUB_API_URL", github.DefaultBaseURL),
 		"GitHub REST API `URL`, for GitHub Enterprise Server (env GITHUB_API_URL)")
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), `durable-mcp worker runs the Temporal worker for repository reports. It
@@ -87,16 +73,9 @@ Flags:
 	if err := fs.Parse(args); err != nil {
 		return workerConfig{}, err
 	}
-	var err error
-	switch {
-	case fs.NArg() > 0:
+	err := cfg.temporal.check()
+	if fs.NArg() > 0 {
 		err = fmt.Errorf("unexpected arguments: %q", fs.Args())
-	case cfg.temporalAddress == "":
-		err = errors.New("-temporal-address must not be empty")
-	case cfg.temporalNamespace == "":
-		err = errors.New("-temporal-namespace must not be empty")
-	case cfg.taskQueue == "":
-		err = errors.New("-task-queue must not be empty")
 	}
 	if err != nil {
 		fmt.Fprintln(fs.Output(), err)
@@ -137,16 +116,16 @@ func serveWorker(ctx context.Context, cfg workerConfig, logger *slog.Logger) err
 	}
 
 	c, err := client.DialContext(ctx, client.Options{
-		HostPort:  cfg.temporalAddress,
-		Namespace: cfg.temporalNamespace,
+		HostPort:  cfg.temporal.address,
+		Namespace: cfg.temporal.namespace,
 		Logger:    log.NewStructuredLogger(logger),
 	})
 	if err != nil {
-		return fmt.Errorf("connect to Temporal at %s: %w", cfg.temporalAddress, err)
+		return fmt.Errorf("connect to Temporal at %s: %w", cfg.temporal.address, err)
 	}
 	defer c.Close()
 
-	w := worker.New(c, cfg.taskQueue, worker.Options{
+	w := worker.New(c, cfg.temporal.taskQueue, worker.Options{
 		MaxConcurrentActivityExecutionSize: maxConcurrentActivities,
 		WorkerStopTimeout:                  workerStopTimeout,
 	})

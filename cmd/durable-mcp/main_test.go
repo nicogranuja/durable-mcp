@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"testing"
@@ -13,6 +15,9 @@ import (
 func env(kv map[string]string) func(string) string {
 	return func(key string) string { return kv[key] }
 }
+
+// noStdin is an empty standard input.
+func noStdin() io.ReadCloser { return io.NopCloser(strings.NewReader("")) }
 
 func TestRun(t *testing.T) {
 	t.Parallel()
@@ -25,13 +30,22 @@ func TestRun(t *testing.T) {
 		wantStderr string
 	}{
 		{name: "version flag", args: []string{"-version"}, wantCode: 0, wantStdout: "durable-mcp dev\n"},
-		{name: "help flag", args: []string{"-h"}, wantCode: 0, wantStderr: "durable-mcp worker [flags]"},
+		{name: "help flag", args: []string{"-h"}, wantCode: 0, wantStderr: "durable-mcp serve [flags]"},
 		{name: "no arguments prints usage", args: nil, wantCode: 2, wantStderr: "Usage:"},
 		{name: "unknown flag", args: []string{"-nope"}, wantCode: 2, wantStderr: "flag provided but not defined"},
 		{name: "worker help", args: []string{"worker", "-h"}, wantCode: 0, wantStderr: "-temporal-address host:port"},
 		{name: "worker unknown flag", args: []string{"worker", "-nope"}, wantCode: 2, wantStderr: "flag provided but not defined: -nope"},
 		{name: "worker extra argument", args: []string{"worker", "now"}, wantCode: 2, wantStderr: `unexpected arguments: ["now"]`},
 		{name: "worker empty task queue", args: []string{"worker", "-task-queue="}, wantCode: 2, wantStderr: "-task-queue must not be empty"},
+		{name: "serve help", args: []string{"serve", "-h"}, wantCode: 0, wantStderr: "-transport transport"},
+		{name: "serve unknown transport", args: []string{"serve", "-transport", "sse"}, wantCode: 2, wantStderr: `-transport must be stdio or http, got "sse"`},
+		{
+			name:       "serve refuses a public address",
+			args:       []string{"serve", "-transport", "http", "-http-addr", "0.0.0.0:8080"},
+			wantCode:   2,
+			wantStderr: `-http-addr "0.0.0.0:8080" is not a loopback address: the HTTP transport has no authentication yet`,
+		},
+		{name: "serve extra argument", args: []string{"serve", "now"}, wantCode: 2, wantStderr: `unexpected arguments: ["now"]`},
 		{
 			// The GitHub client is created before connecting to Temporal,
 			// so a bad configuration fails without a server.
@@ -46,7 +60,7 @@ func TestRun(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var stdout, stderr bytes.Buffer
-			code := run(t.Context(), tt.args, env(map[string]string{"GITHUB_TOKEN": "test-token"}), &stdout, &stderr)
+			code := run(t.Context(), tt.args, env(map[string]string{"GITHUB_TOKEN": "test-token"}), noStdin(), &stdout, &stderr)
 
 			if code != tt.wantCode {
 				t.Errorf("exit code = %d, want %d (stderr: %s)", code, tt.wantCode, stderr.String())
@@ -81,21 +95,17 @@ func TestParseWorkerFlags(t *testing.T) {
 		{
 			name: "defaults suit a local development server",
 			want: workerConfig{
-				temporalAddress:   "localhost:7233",
-				temporalNamespace: "default",
-				taskQueue:         "durable-mcp",
-				githubAPIURL:      "https://api.github.com/",
+				temporal:     temporalConfig{address: "localhost:7233", namespace: "default", taskQueue: "durable-mcp"},
+				githubAPIURL: "https://api.github.com/",
 			},
 		},
 		{
 			name: "environment",
 			env:  allEnv,
 			want: workerConfig{
-				temporalAddress:   "temporal.internal:7233",
-				temporalNamespace: "reports",
-				taskQueue:         "reports-queue",
-				githubAPIURL:      "https://ghe.example.com/api/v3/",
-				githubToken:       "env-token",
+				temporal:     temporalConfig{address: "temporal.internal:7233", namespace: "reports", taskQueue: "reports-queue"},
+				githubAPIURL: "https://ghe.example.com/api/v3/",
+				githubToken:  "env-token",
 			},
 		},
 		{
@@ -106,11 +116,9 @@ func TestParseWorkerFlags(t *testing.T) {
 			},
 			env: allEnv,
 			want: workerConfig{
-				temporalAddress:   "127.0.0.1:7233",
-				temporalNamespace: "dev",
-				taskQueue:         "q",
-				githubAPIURL:      "https://api.github.com/",
-				githubToken:       "env-token",
+				temporal:     temporalConfig{address: "127.0.0.1:7233", namespace: "dev", taskQueue: "q"},
+				githubAPIURL: "https://api.github.com/",
+				githubToken:  "env-token",
 			},
 		},
 	}
@@ -145,7 +153,7 @@ func TestWorkerReportsConnectionFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	var stdout, stderr bytes.Buffer
-	code := run(ctx, []string{"worker", "-temporal-address", addr}, env(nil), &stdout, &stderr)
+	code := run(ctx, []string{"worker", "-temporal-address", addr}, env(nil), noStdin(), &stdout, &stderr)
 
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
@@ -156,3 +164,5 @@ func TestWorkerReportsConnectionFailure(t *testing.T) {
 		}
 	}
 }
+
+func discardLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
