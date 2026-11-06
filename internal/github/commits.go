@@ -50,7 +50,7 @@ type CommitListOptions struct {
 //
 // No request is made until the first call to NextPage or All.
 func (c *Client) ListCommits(owner, repo string, opts CommitListOptions) (*Pager[Commit], error) {
-	if err := validateRepo(owner, repo); err != nil {
+	if err := ValidateRepo(owner, repo); err != nil {
 		return nil, err
 	}
 	if !opts.Since.IsZero() && !opts.Until.IsZero() && opts.Until.Before(opts.Since) {

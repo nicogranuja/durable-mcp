@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -220,6 +221,26 @@ func TestListMethodsValidateRepo(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestValidateRepo(t *testing.T) {
+	t.Parallel()
+
+	valid := [][2]string{{"temporalio", "sdk-go"}, {"a", "b"}, {"Org_1", "repo.name"}, {"acme", ".github"}}
+	for _, args := range valid {
+		if err := github.ValidateRepo(args[0], args[1]); err != nil {
+			t.Errorf("ValidateRepo(%q, %q) = %v, want nil", args[0], args[1], err)
+		}
+	}
+	invalid := [][2]string{
+		{"", "widgets"}, {"acme", ""}, {"acme", ".."}, {".", "widgets"}, {"acme/widgets", "x"},
+		{"acme", "wid gets"}, {"acme", "%2e%2e"}, {"acme", strings.Repeat("a", 101)}, {"acmé", "widgets"},
+	}
+	for _, args := range invalid {
+		if err := github.ValidateRepo(args[0], args[1]); !errors.Is(err, github.ErrInvalidArgument) {
+			t.Errorf("ValidateRepo(%q, %q) = %v, want ErrInvalidArgument", args[0], args[1], err)
+		}
 	}
 }
 

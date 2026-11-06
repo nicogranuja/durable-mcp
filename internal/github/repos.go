@@ -41,7 +41,7 @@ type Repository struct {
 
 // GetRepository fetches a repository by owner and name.
 func (c *Client) GetRepository(ctx context.Context, owner, repo string) (*Repository, error) {
-	if err := validateRepo(owner, repo); err != nil {
+	if err := ValidateRepo(owner, repo); err != nil {
 		return nil, err
 	}
 	var r Repository
@@ -51,11 +51,15 @@ func (c *Client) GetRepository(ctx context.Context, owner, repo string) (*Reposi
 	return &r, nil
 }
 
-// validateRepo checks owner and repo before they become URL path segments.
+// ValidateRepo reports whether owner and repo are valid GitHub account and
+// repository names, as every method that takes them checks before they
+// become URL path segments. The error matches [ErrInvalidArgument].
+//
 // GitHub names only use ASCII letters, digits, '-', '_', and '.', so
 // anything else is rejected rather than escaped. In particular, "/", "..",
 // and "%" could otherwise change which endpoint the request reaches.
-func validateRepo(owner, repo string) error {
+// Callers can use ValidateRepo to reject a bad name before doing any work.
+func ValidateRepo(owner, repo string) error {
 	if !validName(owner) {
 		return fmt.Errorf("%w: invalid owner %q", ErrInvalidArgument, owner)
 	}

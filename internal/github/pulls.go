@@ -67,7 +67,7 @@ type PullRequestListOptions struct {
 //
 // No request is made until the first call to NextPage or All.
 func (c *Client) ListPullRequests(owner, repo string, opts PullRequestListOptions) (*Pager[PullRequest], error) {
-	if err := validateRepo(owner, repo); err != nil {
+	if err := ValidateRepo(owner, repo); err != nil {
 		return nil, err
 	}
 	if err := opts.State.validate(); err != nil {

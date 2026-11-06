@@ -239,7 +239,7 @@ type response struct {
 }
 
 // endpoint returns the absolute URL of the API path made of elem, under the
-// base URL. Callers validate user-supplied elements first (see validateRepo).
+// base URL. Callers validate user-supplied elements first (see ValidateRepo).
 func (c *Client) endpoint(elem ...string) *url.URL {
 	return c.baseURL.JoinPath(elem...)
 }

@@ -72,7 +72,7 @@ type IssueListOptions struct {
 //
 // No request is made until the first call to NextPage or All.
 func (c *Client) ListIssues(owner, repo string, opts IssueListOptions) (*Pager[Issue], error) {
-	if err := validateRepo(owner, repo); err != nil {
+	if err := ValidateRepo(owner, repo); err != nil {
 		return nil, err
 	}
 	if err := opts.State.validate(); err != nil {
