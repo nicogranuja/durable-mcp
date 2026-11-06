@@ -17,8 +17,8 @@ Cancellation is requested, not immediate: the job stops its current GitHub reque
 (a job paused by an operator stops once it is unpaused).
 Call job_status to confirm. Calling cancel_job again, or on a job that already finished, is safe and changes nothing.
 A canceled job cannot be resumed; start a new report instead.`,
+	OutputSchema: outputSchema[CancelJobOutput](map[string][]any{"status": jobStates}),
 	Annotations: &mcp.ToolAnnotations{
-		Title:           "Cancel a report job",
 		DestructiveHint: new(true),
 		IdempotentHint:  true,
 		OpenWorldHint:   new(false),

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
@@ -175,4 +176,28 @@ func isUnreachable(ctx context.Context, err error) bool {
 		return true
 	}
 	return false
+}
+
+// jobStates are the values of a job's status.
+var jobStates = []any{
+	statusRunning, statusCompleted, statusFailed, statusCanceled, statusTerminated, statusTimedOut, statusPaused, statusUnknown,
+}
+
+// outputSchema returns the output schema that AddTool would infer for T,
+// with the allowed values of some of its string properties listed as
+// enums, so that an agent sees them in the schema rather than only in the
+// descriptions.
+func outputSchema[T any](enums map[string][]any) *jsonschema.Schema {
+	s, err := jsonschema.For[T](nil)
+	if err != nil {
+		panic(fmt.Sprintf("output schema for %T: %v", *new(T), err))
+	}
+	for name, values := range enums {
+		p, ok := s.Properties[name]
+		if !ok {
+			panic(fmt.Sprintf("output schema for %T has no property %q", *new(T), name))
+		}
+		p.Enum = values
+	}
+	return s
 }

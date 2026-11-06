@@ -151,6 +151,9 @@ func TestListTools(t *testing.T) {
 		}
 
 		out := schema(t, tool.OutputSchema)
+		if st := out.Properties["status"]; st == nil || !slices.Contains(st.Enum, any("timed_out")) {
+			t.Errorf("%s: output status schema = %+v, want an enum of job states", tt.name, st)
+		}
 		for _, p := range tt.output {
 			if !slices.Contains(out.Required, p) {
 				t.Errorf("%s: output schema requires %v, want it to require %q", tt.name, out.Required, p)
@@ -159,6 +162,9 @@ func TestListTools(t *testing.T) {
 	}
 	if !tools["cancel_job"].Annotations.IdempotentHint || !*tools["cancel_job"].Annotations.DestructiveHint {
 		t.Errorf("cancel_job annotations = %+v, want destructive and idempotent", tools["cancel_job"].Annotations)
+	}
+	if phase := schema(t, tools["job_status"].OutputSchema).Properties["phase"]; phase == nil || len(phase.Enum) != 5 {
+		t.Errorf("job_status phase schema = %+v, want an enum of the running phases", phase)
 	}
 	if tools["start_report"].Annotations.IdempotentHint {
 		t.Error("start_report is marked idempotent, but without a key each call starts a job")
@@ -171,6 +177,7 @@ type jsonSchema struct {
 	Description          string                 `json:"description"`
 	Properties           map[string]*jsonSchema `json:"properties"`
 	Required             []string               `json:"required"`
+	Enum                 []any                  `json:"enum"`
 	AdditionalProperties any                    `json:"additionalProperties"`
 }
 

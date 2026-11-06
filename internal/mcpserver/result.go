@@ -23,8 +23,8 @@ call job_status to follow it and job_result again once it completes. If it faile
 (failure.type is RateLimited, Unavailable, Unauthorized, Forbidden, NotFound, ValidationFailed, RequestRejected,
 ResponseTooLarge, InvalidRequest, Timeout, or Unknown) and failure.retryable says whether starting a new report later could succeed.
 A canceled, terminated, or timed-out job has no report.`,
+	OutputSchema: outputSchema[JobResultOutput](map[string][]any{"status": jobStates}),
 	Annotations: &mcp.ToolAnnotations{
-		Title:          "Get a report job's result",
 		ReadOnlyHint:   true,
 		IdempotentHint: true,
 		OpenWorldHint:  new(false),
@@ -34,7 +34,7 @@ A canceled, terminated, or timed-out job has no report.`,
 // JobResultOutput is the result of job_result.
 type JobResultOutput struct {
 	JobID   string         `json:"job_id"`
-	Status  string         `json:"status" jsonschema:"The job's state: running, completed, failed, canceled, terminated, timed_out, or paused. Only completed has a report."`
+	Status  string         `json:"status" jsonschema:"The job's state. Only completed has a report."`
 	Report  *report.Report `json:"report,omitempty" jsonschema:"The report, once the job completed."`
 	Failure *JobFailure    `json:"failure,omitempty" jsonschema:"Why the job failed, if it did."`
 	Message string         `json:"message" jsonschema:"What the result means and what to do next."`

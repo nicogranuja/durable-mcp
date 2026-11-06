@@ -26,6 +26,12 @@ const (
 	statusUnknown    = "unknown"
 )
 
+// phases are the values of job_status's phase: those of a running report.
+var phases = []any{
+	string(report.PhaseStarted), string(report.PhaseRepository), string(report.PhaseIssues),
+	string(report.PhasePullRequests), string(report.PhaseCommits),
+}
+
 // runStatus names a workflow execution status as a job state.
 func runStatus(s enumspb.WorkflowExecutionStatus) string {
 	switch s {
@@ -59,8 +65,8 @@ which phase it is in and how many pages it has fetched, and what it is doing rig
 A job waiting for a GitHub rate limit says until when; it resumes on its own, so there is nothing to do but check back after that time.
 Polling every 10 to 60 seconds is plenty. Once the state is completed, call job_result for the report;
 for failed, job_result explains why.`,
+	OutputSchema: outputSchema[JobStatusOutput](map[string][]any{"status": jobStates, "phase": phases}),
 	Annotations: &mcp.ToolAnnotations{
-		Title:          "Check a report job",
 		ReadOnlyHint:   true,
 		IdempotentHint: true,
 		OpenWorldHint:  new(false),
@@ -75,9 +81,9 @@ type JobInput struct {
 // JobStatusOutput is the result of job_status.
 type JobStatusOutput struct {
 	JobID  string `json:"job_id"`
-	Status string `json:"status" jsonschema:"The job's state: running, completed, failed, canceled, terminated, timed_out, or paused."`
+	Status string `json:"status" jsonschema:"The job's state. unknown means Temporal reported a state this server does not know; check again later."`
 
-	Phase        report.Phase       `json:"phase,omitempty" jsonschema:"While the job runs, the report's phase: started, repository, issues, pull_requests, or commits. Missing once it finished, or if no worker answered."`
+	Phase        report.Phase       `json:"phase,omitempty" jsonschema:"While the job runs, the report's phase. Missing once it finished, or if no worker answered."`
 	PagesFetched *report.PageCounts `json:"pages_fetched,omitempty" jsonschema:"While the job runs, the pages fetched so far, per resource. Missing once it finished, or if no worker answered."`
 
 	CancelRequested bool      `json:"cancel_requested,omitempty" jsonschema:"True once cancel_job was called for a job that is still stopping."`

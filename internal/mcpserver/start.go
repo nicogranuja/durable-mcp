@@ -34,8 +34,8 @@ Always pass an idempotency_key, a fresh UUID you generate for each new report, a
 a retry with the same key and arguments returns the same job instead of starting a second one, even after the job finished,
 and with the window it was started with. Keys are shared by everyone using this server, so do not use short or guessable keys.
 Reusing a key with different arguments is an error.`,
+	OutputSchema: outputSchema[StartReportOutput](map[string][]any{"status": jobStates}),
 	Annotations: &mcp.ToolAnnotations{
-		Title:           "Start a GitHub repository report",
 		DestructiveHint: new(false),
 		OpenWorldHint:   new(true),
 	},
@@ -53,7 +53,7 @@ type StartReportInput struct {
 // StartReportOutput is the result of start_report.
 type StartReportOutput struct {
 	JobID   string `json:"job_id" jsonschema:"The job's ID. Pass it to job_status, job_result, and cancel_job."`
-	Status  string `json:"status" jsonschema:"The job's state: running for a new job. For an existing job returned for an idempotency key, its current state (running, completed, failed, canceled, terminated, timed_out), or unknown."`
+	Status  string `json:"status" jsonschema:"The job's state: running for a new job; for an existing job returned for an idempotency key, its current state."`
 	Created bool   `json:"created" jsonschema:"True if this call started the job; false if the idempotency key matched a job started earlier."`
 	Message string `json:"message" jsonschema:"What happened and what to do next."`
 }
