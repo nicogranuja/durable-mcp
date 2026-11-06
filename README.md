@@ -105,7 +105,7 @@ GitHub Enterprise Server.
 
 > [!WARNING]
 > The HTTP transport has **no authentication yet** (bearer-token auth is the next milestone). Anyone who can reach it can
-> start and cancel jobs, so it listens on `127.0.0.1` by default and refuses any address that is not loopback. It also
+> start and cancel jobs, so it listens on `127.0.0.1` by default and refuses any address that is not a loopback IP. It also
 > rejects requests with a non-loopback `Host` header (DNS rebinding) and cross-origin browser requests, so web pages
 > cannot reach it either.
 

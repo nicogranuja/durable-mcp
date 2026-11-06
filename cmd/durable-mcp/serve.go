@@ -59,7 +59,7 @@ func parseServeFlags(args []string, getenv func(string) string, stderr io.Writer
 	fs.StringVar(&cfg.transport, "transport", envOr(getenv, "DURABLE_MCP_TRANSPORT", transportStdio),
 		"MCP `transport`: stdio, or http for streamable HTTP (env DURABLE_MCP_TRANSPORT)")
 	fs.StringVar(&cfg.httpAddr, "http-addr", envOr(getenv, "DURABLE_MCP_HTTP_ADDR", defaultHTTPAddr),
-		"`host:port` for the http transport to listen on; must be a loopback address (env DURABLE_MCP_HTTP_ADDR)")
+		"`host:port` for the http transport to listen on; the host must be a loopback IP address (env DURABLE_MCP_HTTP_ADDR)")
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), `durable-mcp serve runs the MCP server, whose tools start repository
 reports as Temporal workflows and report on them. It needs a Temporal
@@ -67,7 +67,7 @@ server and a running "durable-mcp worker" to do the work, and stops on
 SIGINT or SIGTERM, or, with the stdio transport, when stdin closes.
 
 The http transport serves streamable HTTP at http://HOST:PORT`+mcpPath+`. It has no
-authentication yet, so it only listens on loopback addresses.
+authentication yet, so it only listens on loopback IP addresses.
 
 Usage:
   durable-mcp serve [flags]
@@ -107,11 +107,13 @@ func checkLoopback(addr string) error {
 	if err != nil {
 		return fmt.Errorf("-http-addr %q is not host:port: %w", addr, err)
 	}
-	if ip, err := netip.ParseAddr(host); host == "localhost" || (err == nil && ip.IsLoopback()) {
+	// An IP literal, not a name such as localhost: a name is only as
+	// loopback as the resolver says.
+	if ip, err := netip.ParseAddr(host); err == nil && ip.IsLoopback() {
 		return nil
 	}
 	return fmt.Errorf("-http-addr %q is not a loopback address: the HTTP transport has no authentication yet, "+
-		"so it only listens on 127.0.0.1, ::1, or localhost", addr)
+		"so it only listens on a loopback IP address, such as 127.0.0.1 or [::1]", addr)
 }
 
 // runServe runs the serve subcommand until ctx is canceled, or stdin
@@ -181,8 +183,12 @@ func serveHTTP(ctx context.Context, server *mcp.Server, addr string, logger *slo
 		return err
 	}
 	srv := &http.Server{
-		Handler:           httpHandler(server, logger),
+		Handler: httpHandler(server, logger),
+		// No tool streams or takes long, and stateless mode has no
+		// long-lived GET stream, so every request can be bounded.
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      time.Minute,
 		IdleTimeout:       2 * time.Minute,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
@@ -198,6 +204,7 @@ func serveHTTP(ctx context.Context, server *mcp.Server, addr string, logger *slo
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), httpShutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
+		_ = srv.Close() // drop the requests that did not finish in time
 		return fmt.Errorf("shut down the HTTP server: %w", err)
 	}
 	if err := <-errc; !errors.Is(err, http.ErrServerClosed) {

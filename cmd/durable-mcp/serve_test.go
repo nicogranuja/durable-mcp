@@ -48,12 +48,12 @@ func TestParseServeFlags(t *testing.T) {
 		},
 		{
 			name: "flags override the environment",
-			args: []string{"-transport", "http", "-http-addr", "localhost:0", "-task-queue", "q"},
+			args: []string{"-transport", "http", "-http-addr", "127.0.0.1:0", "-task-queue", "q"},
 			env:  map[string]string{"DURABLE_MCP_TRANSPORT": "stdio", "DURABLE_MCP_TASK_QUEUE": "reports"},
 			want: serveConfig{
 				temporal:  temporalConfig{address: "localhost:7233", namespace: "default", taskQueue: "q"},
 				transport: "http",
-				httpAddr:  "localhost:0",
+				httpAddr:  "127.0.0.1:0",
 			},
 		},
 		{
@@ -85,12 +85,14 @@ func TestParseServeFlags(t *testing.T) {
 func TestCheckLoopback(t *testing.T) {
 	t.Parallel()
 
-	for _, addr := range []string{"127.0.0.1:8080", "127.0.0.2:1", "[::1]:8080", "localhost:8080", "localhost:0"} {
+	for _, addr := range []string{"127.0.0.1:8080", "127.0.0.2:1", "[::1]:8080", "127.0.0.1:0", "[::ffff:127.0.0.1]:8080"} {
 		if err := checkLoopback(addr); err != nil {
 			t.Errorf("checkLoopback(%q) = %v, want nil", addr, err)
 		}
 	}
-	for _, addr := range []string{":8080", "0.0.0.0:8080", "[::]:8080", "192.168.1.10:8080", "example.com:80", "127.0.0.1"} {
+	for _, addr := range []string{
+		":8080", "0.0.0.0:8080", "[::]:8080", "192.168.1.10:8080", "example.com:80", "127.0.0.1", "localhost:8080",
+	} {
 		if err := checkLoopback(addr); err == nil {
 			t.Errorf("checkLoopback(%q) = nil, want an error", addr)
 		}
