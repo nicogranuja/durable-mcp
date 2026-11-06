@@ -15,7 +15,9 @@
 //   - start_report validates the request, starts the RepositoryReport
 //     workflow, and returns its job ID.
 //   - job_status reports the job's state, from DescribeWorkflowExecution,
-//     and its progress, from the workflow's progress query. A retry in
+//     and, while it runs, its progress, from the workflow's progress
+//     query. A closed job is not queried, since that would make a worker
+//     replay its history on every poll. A retry in
 //     progress is not workflow state: Temporal keeps it in the pending
 //     activity, with the attempt, the last failure, and the next attempt
 //     time. That is where a page waiting for a GitHub rate limit shows up,
@@ -40,8 +42,14 @@
 // key, so a retried call with the same key names the same workflow, and
 // Temporal's ID reuse policy, RejectDuplicate, refuses to start it twice,
 // even after the first run finished. The workflow's memo records a
-// fingerprint of the request, so reusing a key for a different request is
-// reported as an error instead of returning the wrong job.
+// fingerprint of the request, so reusing a key for a different request, or
+// a key whose job has no fingerprint, is reported as an error instead of
+// returning the wrong job. Keys are shared by every client of the
+// namespace, which is why the tool asks for UUIDs.
+//
+// A start that times out may still have started the job, so its error
+// says to repeat the call with the same key, or, without a key, to check
+// the job ID it would have had before starting another.
 //
 // A job runs for at most [JobTimeout]. Finished jobs, and so the keys that
 // map to them, are kept for the Temporal namespace's retention period.
