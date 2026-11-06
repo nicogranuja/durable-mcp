@@ -92,8 +92,8 @@ func New(c Client, opts Options) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "durable-mcp", Version: opts.Version}, &mcp.ServerOptions{
 		Instructions: instructions,
 		Logger:       logger,
-		// No logging capability: the server's logs go to its operator, not
-		// to the client.
+		// Not the SDK's default logging capability, which protocol version
+		// 2026-07-28 deprecates: the server's logs go to its operator.
 		Capabilities: &mcp.ServerCapabilities{},
 	})
 	t := &tools{client: c, taskQueue: opts.TaskQueue, logger: logger}
