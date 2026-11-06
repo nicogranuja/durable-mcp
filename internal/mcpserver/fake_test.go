@@ -199,7 +199,7 @@ func (f *fakeClient) CancelWorkflow(ctx context.Context, id, runID string) error
 	if f.beforeCancel != nil {
 		f.beforeCancel(j)
 	}
-	if j.status != enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING {
+	if j.status != enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING && j.status != enumspb.WORKFLOW_EXECUTION_STATUS_PAUSED {
 		return serviceerror.NewNotFound("workflow execution already completed")
 	}
 	j.cancelRequested = true

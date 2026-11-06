@@ -13,7 +13,8 @@ var cancelJobTool = &mcp.Tool{
 	Title: "Cancel a report job",
 	Description: `Cancel a job that start_report started, if you no longer need its report.
 
-Cancellation is requested, not immediate: the job stops its current GitHub request and ends as canceled, usually within seconds.
+Cancellation is requested, not immediate: the job stops its current GitHub request and ends as canceled, usually within seconds
+(a job paused by an operator stops once it is unpaused).
 Call job_status to confirm. Calling cancel_job again, or on a job that already finished, is safe and changes nothing.
 A canceled job cannot be resumed; start a new report instead.`,
 	Annotations: &mcp.ToolAnnotations{
@@ -59,13 +60,17 @@ func (t *tools) cancelJob(ctx context.Context, _ *mcp.CallToolRequest, in JobInp
 		return nil, stoppingOutput(in.JobID, st, "Cancellation was already requested; the job is stopping."), nil
 	}
 	if _, ok := errors.AsType[*serviceerror.NotFound](err); ok {
-		// The run finished between the describe and the cancel.
+		// The run most likely finished between the describe and the
+		// cancel. The job exists, so this is never "no such job".
 		resp, derr := t.describeJob(ctx, "cancel_job", in.JobID)
 		if derr == nil {
-			if st := runStatus(resp.GetWorkflowExecutionInfo().GetStatus()); st != statusRunning {
+			if st := runStatus(resp.GetWorkflowExecutionInfo().GetStatus()); st != statusRunning && st != statusPaused {
 				return nil, finishedOutput(in.JobID, st), nil
 			}
 		}
+		t.logger.Warn("Cancel found no open run of a job that exists", "JobID", in.JobID, "Error", err)
+		return nil, CancelJobOutput{}, errors.New("cancel_job: the job changed while it was being canceled. " +
+			"Call cancel_job again; that is safe")
 	}
 	return nil, CancelJobOutput{}, t.temporalError(cancelCtx, "cancel_job", in.JobID, err)
 }
@@ -76,12 +81,11 @@ func isAlreadyRequested(err error) bool {
 }
 
 func stoppingOutput(jobID, st, what string) CancelJobOutput {
-	return CancelJobOutput{
-		JobID:           jobID,
-		Status:          st,
-		CancelRequested: true,
-		Message:         what + " Call job_status to confirm that it ends as canceled; there is no report.",
+	msg := what + " Call job_status to confirm that it ends as canceled; there is no report."
+	if st == statusPaused {
+		msg = what + " The job is paused by an operator, so it stops only once it is unpaused; there is no report."
 	}
+	return CancelJobOutput{JobID: jobID, Status: st, CancelRequested: true, Message: msg}
 }
 
 func finishedOutput(jobID, st string) CancelJobOutput {

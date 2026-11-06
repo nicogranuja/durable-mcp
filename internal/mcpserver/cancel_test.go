@@ -67,6 +67,23 @@ func TestCancelJobFinished(t *testing.T) {
 	}
 }
 
+func TestCancelJobPaused(t *testing.T) {
+	t.Parallel()
+
+	f := newFakeClient()
+	f.add(testJobID, enumspb.WORKFLOW_EXECUTION_STATUS_PAUSED)
+	_, out, err := newTools(f).cancelJob(t.Context(), nil, JobInput{JobID: testJobID})
+	if err != nil {
+		t.Fatalf("cancelJob() error = %v", err)
+	}
+	if !out.CancelRequested || out.Status != statusPaused || !strings.Contains(out.Message, "stops only once it is unpaused") {
+		t.Errorf("cancelJob() = %s, want a request that waits for the job to be unpaused", mustJSON(out))
+	}
+	if len(f.cancels) != 1 {
+		t.Errorf("canceled %d times, want 1", len(f.cancels))
+	}
+}
+
 func TestCancelJobRaces(t *testing.T) {
 	t.Parallel()
 
@@ -82,6 +99,18 @@ func TestCancelJobRaces(t *testing.T) {
 		}
 		if out.Status != statusCompleted || out.CancelRequested {
 			t.Errorf("cancelJob() = %s, want it to report the job completed", mustJSON(out))
+		}
+	})
+
+	t.Run("job still open after not found", func(t *testing.T) {
+		t.Parallel()
+		f := newFakeClient()
+		f.add(testJobID, enumspb.WORKFLOW_EXECUTION_STATUS_PAUSED)
+		f.cancelErr = serviceerror.NewNotFound("workflow execution not found")
+
+		_, out, err := newTools(f).cancelJob(t.Context(), nil, JobInput{JobID: testJobID})
+		if err == nil || !strings.Contains(err.Error(), "Call cancel_job again") || strings.Contains(err.Error(), "no job") {
+			t.Errorf("cancelJob() = %s, %v; want a retryable error, not a finished or missing job", mustJSON(out), err)
 		}
 	})
 
