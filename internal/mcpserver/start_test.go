@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -201,7 +202,7 @@ func TestStartReportTemporalErrors(t *testing.T) {
 		{
 			name: "unavailable",
 			err:  serviceerror.NewUnavailable("dial tcp 10.1.2.3:7233: connect: connection refused"),
-			want: "did not respond in time or is unavailable. Jobs are not affected. Retry this call in a few seconds",
+			want: "did not respond in time or is unavailable, so the job may or may not have started",
 		},
 		{
 			name: "unexpected",
@@ -225,6 +226,37 @@ func TestStartReportTemporalErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestStartReportTimeout covers a start that Temporal may have carried out
+// even though it did not answer in time: the advice must not lead to a
+// second job.
+func TestStartReportTimeout(t *testing.T) {
+	t.Parallel()
+
+	t.Run("with a key", func(t *testing.T) {
+		t.Parallel()
+		f := newFakeClient()
+		f.startErr = serviceerror.NewDeadlineExceeded("context deadline exceeded")
+		_, _, err := newTools(f).startReport(t.Context(), nil, StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: "k-1"})
+		if err == nil || !strings.Contains(err.Error(), "may or may not have started. Retry this call in a few seconds with the same arguments and idempotency_key") {
+			t.Errorf("startReport() error = %v, want advice to retry with the same key", err)
+		}
+	})
+
+	t.Run("without a key", func(t *testing.T) {
+		t.Parallel()
+		f := newFakeClient()
+		f.startErr = serviceerror.NewUnavailable("connection reset")
+		_, _, err := newTools(f).startReport(t.Context(), nil, StartReportInput{Owner: "acme", Repo: "widgets"})
+		if len(f.starts) != 1 {
+			t.Fatalf("started %d times, want 1", len(f.starts))
+		}
+		want := fmt.Sprintf("if it did, its job_id is %q. In a few seconds, call job_status with that job_id", f.starts[0].ID)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("startReport() error = %v, want it to contain %q", err, want)
+		}
+	})
 }
 
 func TestJobIDs(t *testing.T) {

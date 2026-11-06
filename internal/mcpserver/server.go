@@ -153,16 +153,26 @@ func (t *tools) temporalError(ctx context.Context, op, jobID string, err error) 
 	}
 	t.logger.Warn("Temporal call failed", "Op", op, "JobID", jobID, "Error", err)
 
-	code := serviceerror.ToStatus(err).Code()
-	switch {
-	case errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil,
-		code == codes.DeadlineExceeded, code == codes.Unavailable, code == codes.ResourceExhausted,
-		code == codes.Canceled:
+	if isUnreachable(ctx, err) {
 		return fmt.Errorf("%s: the job service (Temporal) did not respond in time or is unavailable. "+
 			"Jobs are not affected. Retry this call in a few seconds; if it keeps failing, "+
 			"tell the user that the durable-mcp server cannot reach Temporal", op)
-	default:
-		return fmt.Errorf("%s: the job service (Temporal) returned an unexpected error (code %s). "+
-			"Retry once; if it fails again, stop and tell the user, with the job ID if you have one", op, code)
 	}
+	return fmt.Errorf("%s: the job service (Temporal) returned an unexpected error (code %s). "+
+		"Retry once; if it fails again, stop and tell the user, with the job ID if you have one",
+		op, serviceerror.ToStatus(err).Code())
+}
+
+// isUnreachable reports whether err means that Temporal did not answer in
+// time or could not be reached. Such a call may still have taken effect on
+// the server.
+func isUnreachable(ctx context.Context, err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+		return true
+	}
+	switch serviceerror.ToStatus(err).Code() {
+	case codes.DeadlineExceeded, codes.Unavailable, codes.ResourceExhausted, codes.Canceled:
+		return true
+	}
+	return false
 }

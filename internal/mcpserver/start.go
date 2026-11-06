@@ -30,8 +30,10 @@ Returns a job_id immediately; the report itself runs durably on the server and c
 
 The window defaults to the 30 days before the job starts and can be at most 366 days long.
 
-Pass an idempotency_key (for example a UUID you generate) if you might retry this call: a retry with the same key and arguments
-returns the same job instead of starting a second one. Reusing a key with different arguments is an error.`,
+Always pass an idempotency_key, a fresh UUID you generate for each new report, and reuse it if you retry this call:
+a retry with the same key and arguments returns the same job instead of starting a second one, even after the job finished,
+and with the window it was started with. Keys are shared by everyone using this server, so do not use short or guessable keys.
+Reusing a key with different arguments is an error.`,
 	Annotations: &mcp.ToolAnnotations{
 		Title:           "Start a GitHub repository report",
 		DestructiveHint: new(false),
@@ -45,7 +47,7 @@ type StartReportInput struct {
 	Repo           string `json:"repo" jsonschema:"Repository name: REPO in github.com/OWNER/REPO, such as sdk-go."`
 	Since          string `json:"since,omitempty" jsonschema:"Start of the window, inclusive. An RFC 3339 time such as 2026-10-01T00:00:00Z, or a date such as 2026-10-01 (midnight UTC). Defaults to 30 days before until."`
 	Until          string `json:"until,omitempty" jsonschema:"End of the window, exclusive, in the same formats as since. Defaults to the time the job starts."`
-	IdempotencyKey string `json:"idempotency_key,omitempty" jsonschema:"Optional key, up to 200 characters, that makes retries safe: calls with the same key and arguments return the same job. Use a fresh key, such as a UUID, for each new report."`
+	IdempotencyKey string `json:"idempotency_key,omitempty" jsonschema:"Key, up to 200 characters, that makes retries safe: calls with the same key and arguments return the same job. Use a fresh UUID for each new report and the same one when retrying."`
 }
 
 // StartReportOutput is the result of start_report.
@@ -140,7 +142,7 @@ func (t *tools) startReport(ctx context.Context, _ *mcp.CallToolRequest, in Star
 		return t.existingJob(ctx, jobID, fp)
 	}
 	if err != nil {
-		return nil, StartReportOutput{}, t.temporalError(startCtx, "start_report", jobID, err)
+		return nil, StartReportOutput{}, t.startError(startCtx, jobID, in.IdempotencyKey != "", err)
 	}
 	t.logger.Info("Started report job", "JobID", jobID, "Owner", req.Owner, "Repo", req.Repo)
 	return nil, StartReportOutput{
@@ -149,6 +151,26 @@ func (t *tools) startReport(ctx context.Context, _ *mcp.CallToolRequest, in Star
 		Created: true,
 		Message: "The report job started. Call job_status with this job_id to follow it, and job_result once its status is completed.",
 	}, nil
+}
+
+// startError turns an error from starting a job into a tool error. When
+// Temporal did not answer in time, the start may still have succeeded, so
+// the advice must not lead to a second job: with a key, the same call is
+// safe to repeat; without one, the agent gets the job ID that may exist.
+func (t *tools) startError(ctx context.Context, jobID string, haveKey bool, err error) error {
+	if !isUnreachable(ctx, err) {
+		return t.temporalError(ctx, "start_report", jobID, err)
+	}
+	t.logger.Warn("Temporal call failed", "Op", "start_report", "JobID", jobID, "Error", err)
+	if haveKey {
+		return errors.New("start_report: the job service (Temporal) did not respond in time or is unavailable, " +
+			"so the job may or may not have started. Retry this call in a few seconds with the same arguments and " +
+			"idempotency_key: that is safe, and returns the job if it did start")
+	}
+	return fmt.Errorf("start_report: the job service (Temporal) did not respond in time or is unavailable, "+
+		"so the job may or may not have started; if it did, its job_id is %q. In a few seconds, call job_status "+
+		"with that job_id before starting another report (it says no job exists if none started), and pass an "+
+		"idempotency_key so that retries are safe", jobID)
 }
 
 // existingJob answers a start whose idempotency key names a job that
