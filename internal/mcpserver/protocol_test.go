@@ -235,12 +235,11 @@ func TestJobLifecycle(t *testing.T) {
 	j.status = enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED
 	j.closeTime = time.Now()
 	j.pending = nil
-	j.progress = &report.Progress{Phase: report.PhaseCompleted, Pages: report.PageCounts{Issues: 2, PullRequests: 1, Commits: 1}}
 	j.result = report.Report{Repository: report.Repository{FullName: "acme/widgets"}}
 	f.mu.Unlock()
 
 	status = structured[JobStatusOutput](t, call(t, cs, "job_status", args))
-	if status.Status != statusCompleted || status.Phase != report.PhaseCompleted {
+	if status.Status != statusCompleted || status.ClosedAt.IsZero() {
 		t.Errorf("job_status = %s, want completed", mustJSON(status))
 	}
 	result := structured[JobResultOutput](t, call(t, cs, "job_result", args))

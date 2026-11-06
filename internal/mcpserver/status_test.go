@@ -188,6 +188,10 @@ func TestJobStatusClosed(t *testing.T) {
 			if out.Status != tt.want || !out.ClosedAt.Equal(j.closeTime) || !out.TimesOutAt.IsZero() || out.CurrentStep != nil {
 				t.Errorf("jobStatus() = %s, want %s, closed at %v, no deadline or step", mustJSON(out), tt.want, j.closeTime)
 			}
+			// A query of a closed job makes a worker replay its history.
+			if f.queries != 0 || out.Phase != "" || out.PagesFetched != nil {
+				t.Errorf("%d progress queries, progress %q, %+v; want no query for a closed job", f.queries, out.Phase, out.PagesFetched)
+			}
 			if !strings.Contains(out.Message, tt.msg) {
 				t.Errorf("message = %q, want it to contain %q", out.Message, tt.msg)
 			}

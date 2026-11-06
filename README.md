@@ -136,8 +136,7 @@ tool calls are what Claude Code shows; the numbers are from a real run):
 >
 > *calls `job_status`* → `running`, in phase `repository`.
 >
-> *calls `job_status`* a few seconds later → `completed`, after 2 issue, 2 pull request, and 1 commit pages.
-> *calls `job_result`*
+> *calls `job_status`* a few seconds later → `completed`. *calls `job_result`*
 >
 > **Claude:** In the last 30 days temporalio/sdk-go merged 65 of 99 new pull requests (median time to merge about 44
 > hours), opened 11 issues and closed 12, and had 65 commits from 28 contributors…

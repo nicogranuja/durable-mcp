@@ -37,6 +37,7 @@ type fakeClient struct {
 	beforeCancel func(*fakeJob)
 
 	starts  []client.StartWorkflowOptions
+	queries int
 	cancels []string // workflow ID and run ID, as "id/run"
 }
 
@@ -160,6 +161,7 @@ func (f *fakeClient) QueryWorkflow(ctx context.Context, id, runID, queryType str
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	f.queries++
 	if f.queryErr != nil {
 		return nil, f.queryErr
 	}

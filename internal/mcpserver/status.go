@@ -77,8 +77,8 @@ type JobStatusOutput struct {
 	JobID  string `json:"job_id"`
 	Status string `json:"status" jsonschema:"The job's state: running, completed, failed, canceled, terminated, timed_out, or paused."`
 
-	Phase        report.Phase       `json:"phase,omitempty" jsonschema:"The report's phase: started, repository, issues, pull_requests, commits, completed, failed, or canceled. Missing if the worker did not answer."`
-	PagesFetched *report.PageCounts `json:"pages_fetched,omitempty" jsonschema:"Pages fetched so far, per resource. Missing if the worker did not answer."`
+	Phase        report.Phase       `json:"phase,omitempty" jsonschema:"While the job runs, the report's phase: started, repository, issues, pull_requests, or commits. Missing once it finished, or if no worker answered."`
+	PagesFetched *report.PageCounts `json:"pages_fetched,omitempty" jsonschema:"While the job runs, the pages fetched so far, per resource. Missing once it finished, or if no worker answered."`
 
 	CancelRequested bool      `json:"cancel_requested,omitempty" jsonschema:"True once cancel_job was called for a job that is still stopping."`
 	StartedAt       time.Time `json:"started_at,omitzero"`
@@ -129,14 +129,21 @@ func (t *tools) jobStatus(ctx context.Context, _ *mcp.CallToolRequest, in JobInp
 		}
 	}
 
-	progress, err := t.progress(ctx, in.JobID, info.GetExecution().GetRunId())
-	if err == nil {
-		out.Phase = progress.Phase
-		out.PagesFetched = &progress.Pages
-	} else {
-		t.logger.Info("Progress query failed", "JobID", in.JobID, "Error", err)
+	// Only an open job is queried. A query of a closed one makes a worker
+	// replay its whole history, on every poll, for nothing the answer
+	// needs: the state says how it ended.
+	haveProgress := false
+	if out.Status == statusRunning || out.Status == statusPaused {
+		progress, err := t.progress(ctx, in.JobID, info.GetExecution().GetRunId())
+		if err == nil {
+			out.Phase = progress.Phase
+			out.PagesFetched = &progress.Pages
+			haveProgress = true
+		} else {
+			t.logger.Info("Progress query failed", "JobID", in.JobID, "Error", err)
+		}
 	}
-	out.Message = statusMessage(out, err == nil, time.Now())
+	out.Message = statusMessage(out, haveProgress, time.Now())
 	return nil, out, nil
 }
 
