@@ -180,13 +180,17 @@ func (t *tools) existingJob(ctx context.Context, jobID, fp string) (*mcp.CallToo
 	if err != nil {
 		return nil, StartReportOutput{}, err
 	}
-	if payload := resp.GetWorkflowExecutionInfo().GetMemo().GetFields()[memoFingerprint]; payload != nil {
-		var got string
-		if err := converter.GetDefaultDataConverter().FromPayload(payload, &got); err == nil && got != fp {
-			return nil, StartReportOutput{}, errors.New("invalid arguments: this idempotency_key was already used " +
-				"to start a report with different arguments. Use a new idempotency_key for a different report, " +
-				"or repeat the original arguments to get the original job")
+	// A job without a readable fingerprint was not started by start_report,
+	// so it cannot be shown to be for this request.
+	var got string
+	payload := resp.GetWorkflowExecutionInfo().GetMemo().GetFields()[memoFingerprint]
+	if payload == nil || converter.GetDefaultDataConverter().FromPayload(payload, &got) != nil || got != fp {
+		if got == "" {
+			t.logger.Warn("Job for an idempotency key has no request fingerprint", "JobID", jobID)
 		}
+		return nil, StartReportOutput{}, errors.New("invalid arguments: this idempotency_key was already used " +
+			"to start a report with different arguments. Use a new idempotency_key for a different report, " +
+			"or repeat the original arguments to get the original job")
 	}
 	st := runStatus(resp.GetWorkflowExecutionInfo().GetStatus())
 	return nil, StartReportOutput{

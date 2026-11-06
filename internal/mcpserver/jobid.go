@@ -5,9 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -65,19 +66,29 @@ func validateKey(key string) error {
 // fingerprint identifies the request a job was started for, so that a
 // retry with the same idempotency key can be checked against it. GitHub
 // names are not case sensitive, so neither is the fingerprint.
+//
+// The fingerprint is stored in the job's memo, so its format must never
+// change: a retry after an upgrade has to match the jobs started before
+// it. It is built from an explicit list of fields, not from the Request's
+// JSON, so that a new Request field does not change it by accident. A
+// field that affects the report must be added at the end, and only when
+// set, so existing fingerprints stay the same.
 func fingerprint(req report.Request) string {
-	canonical := report.Request{
-		Owner:    strings.ToLower(req.Owner),
-		Repo:     strings.ToLower(req.Repo),
-		Since:    req.Since.UTC(),
-		Until:    req.Until.UTC(),
-		MaxPages: req.MaxPages,
+	formatTime := func(t time.Time) string {
+		if t.IsZero() {
+			return ""
+		}
+		return t.UTC().Format(time.RFC3339Nano)
 	}
-	b, err := json.Marshal(canonical)
-	if err != nil {
-		panic(err) // a Request always marshals
-	}
-	sum := sha256.Sum256(b)
+	canonical := strings.Join([]string{
+		"report/v1",
+		strings.ToLower(req.Owner),
+		strings.ToLower(req.Repo),
+		formatTime(req.Since),
+		formatTime(req.Until),
+		strconv.Itoa(req.MaxPages),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(canonical))
 	return hex.EncodeToString(sum[:16])
 }
 

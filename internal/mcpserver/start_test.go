@@ -228,6 +228,45 @@ func TestStartReportTemporalErrors(t *testing.T) {
 	}
 }
 
+func TestFingerprint(t *testing.T) {
+	t.Parallel()
+
+	req := report.Request{Owner: "acme", Repo: "widgets", Since: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}
+	// Fingerprints are stored in running jobs' memos, so they must never
+	// change.
+	if got, want := fingerprint(req), "5dc004c46681a2608883e6bce8d954b1"; got != want {
+		t.Errorf("fingerprint(%+v) = %q, want %q", req, got, want)
+	}
+	same := report.Request{Owner: "ACME", Repo: "Widgets", Since: req.Since.In(time.FixedZone("PDT", -7*3600))}
+	if fingerprint(same) != fingerprint(req) {
+		t.Errorf("fingerprint differs for %+v, the same request", same)
+	}
+	for _, other := range []report.Request{
+		{Owner: "acme", Repo: "gadgets", Since: req.Since},
+		{Owner: "acme", Repo: "widgets"},
+		{Owner: "acme", Repo: "widgets", Since: req.Since, Until: req.Since.Add(time.Hour)},
+		{Owner: "acme", Repo: "widgets", Since: req.Since, MaxPages: 5},
+		{Owner: "acmew", Repo: "idgets", Since: req.Since},
+	} {
+		if fingerprint(other) == fingerprint(req) {
+			t.Errorf("fingerprint(%+v) equals that of a different request", other)
+		}
+	}
+}
+
+func TestStartReportKeyOfForeignJob(t *testing.T) {
+	t.Parallel()
+
+	// A report workflow with the key's ID that start_report did not start,
+	// so it has no fingerprint, is not returned as the caller's job.
+	f := newFakeClient()
+	f.add(jobIDForKey("k"), enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING)
+	_, out, err := newTools(f).startReport(t.Context(), nil, StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: "k"})
+	if err == nil || !strings.Contains(err.Error(), "already used to start a report with different arguments") {
+		t.Errorf("startReport() = %+v, %v; want an error about the key", out, err)
+	}
+}
+
 // TestStartReportTimeout covers a start that Temporal may have carried out
 // even though it did not answer in time: the advice must not lead to a
 // second job.
