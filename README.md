@@ -48,10 +48,10 @@ Temporal server          holds every job's state, timers, and retries
   ▼
 durable-mcp worker
   └─ RepositoryReport workflow          adds up page summaries, answers the "progress" query
-       ├─ FetchRepository               one request; fails fast on 401 or 404
-       ├─ FetchIssuesPage        x N    one page per activity, each starting at the
-       ├─ FetchPullRequestsPage  x N    previous page's cursor
-       └─ FetchCommitsPage       x N
+       ├─ report.FetchRepository               one request; fails fast on 401 or 404
+       ├─ report.FetchIssuesPage        x N    one page per activity, each starting at the
+       ├─ report.FetchPullRequestsPage  x N    previous page's cursor
+       └─ report.FetchCommitsPage       x N
             └─ internal/github ── GitHub REST API
 ```
 
@@ -70,7 +70,9 @@ durable-mcp worker
   GitHub's reset time. The Temporal server holds the wait, so no worker is tied up and a restart loses nothing. That
   retry is not in the workflow's history or its progress query; it is in the pending activity, which `job_status` reads
   with `DescribeWorkflowExecution` and reports as "waiting for GitHub rate limit until ...". Missing repositories, bad
-  tokens, and similar 4xx errors are not retried; 5xx and network errors are, with exponential backoff.
+  tokens, similar 4xx errors, and other failures that would repeat (a next-page link or redirect off the API) are not
+  retried; 5xx and network errors are, with exponential backoff. Each failure has one type, such as `report.NotFound`,
+  and `job_result` tells the agent whether a new report could succeed and what to do next.
 - **Progress and cancellation.** The `progress` query reports the phase and pages fetched so far. `cancel_job` cancels
   the workflow, which cancels the activity in flight; it notices through its heartbeat and aborts its request.
 
