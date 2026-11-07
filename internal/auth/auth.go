@@ -147,6 +147,10 @@ func (t *Tokens) add(s string) error {
 	if !ok {
 		return errors.New(`want "name:sha256-hex-of-token"`)
 	}
+	if strings.HasPrefix(name, TokenPrefix) {
+		// The fields are swapped; never quote what is likely a token.
+		return errors.New(`the entry starts with a token: write "name:sha256-hex-of-token", and store only the hash`)
+	}
 	if err := ValidateName(name); err != nil {
 		return err
 	}

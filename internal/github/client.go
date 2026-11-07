@@ -190,8 +190,8 @@ const maxRedirects = 10
 func (c *Client) checkRedirect(next func(*http.Request, []*http.Request) error) func(*http.Request, []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
 		if !c.ownsURL(req.URL) {
-			return fmt.Errorf("%w: refusing to follow redirect to %s, which is outside %s",
-				ErrRedirectRefused, req.URL.Redacted(), c.baseURL.Redacted())
+			return fmt.Errorf("%w: refusing to follow redirect to %s, which is outside the API",
+				ErrRedirectRefused, origin(req.URL))
 		}
 		if next != nil {
 			return next(req, via)
@@ -221,6 +221,13 @@ func parseBaseURL(rawURL string, hasToken bool) (*url.URL, error) {
 		u.Path += "/"
 	}
 	return u, nil
+}
+
+// origin returns u's scheme and host, for naming a URL the client refused
+// in an error. The path and query can hold signed or private parameters,
+// and errors reach workflow history and agents, so they are left out.
+func origin(u *url.URL) string {
+	return u.Scheme + "://" + u.Host
 }
 
 func isLoopback(host string) bool {

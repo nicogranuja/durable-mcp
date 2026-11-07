@@ -652,6 +652,9 @@ func TestRedirects(t *testing.T) {
 				if !errors.Is(err, github.ErrRedirectRefused) {
 					t.Errorf("GetRepository error = %v, want it to match ErrRedirectRefused", err)
 				}
+				if strings.Contains(err.Error(), "/login") || strings.Contains(err.Error(), "redirect to http://"+strings.TrimPrefix(outside.URL, "http://")+"/") {
+					t.Errorf("GetRepository error = %v, want only the refused URL's origin, not its path", err)
+				}
 				select {
 				case <-followed:
 					t.Error("the API server received the redirected request")

@@ -106,3 +106,13 @@ func TestNewToken(t *testing.T) {
 		t.Errorf("a minted token does not verify against its entry")
 	}
 }
+
+func TestParseTokensSwappedFieldsDoNotEchoTheToken(t *testing.T) {
+	t.Parallel()
+
+	token := auth.NewToken()
+	_, err := auth.ParseTokens(strings.NewReader(token + ":alice"))
+	if err == nil || strings.Contains(err.Error(), token) {
+		t.Errorf("ParseTokens() error = %v, want one that does not quote the token", err)
+	}
+}

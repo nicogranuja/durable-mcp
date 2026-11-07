@@ -272,8 +272,8 @@ func (c *Client) nextPageURL(h http.Header, current *url.URL) (*url.URL, error) 
 	}
 	next := current.ResolveReference(ref)
 	if !c.ownsURL(next) {
-		return nil, fmt.Errorf("%w: GET %s: next page link %q points outside %s",
-			ErrInvalidNextLink, current.Path, next.Redacted(), c.baseURL.Redacted())
+		return nil, fmt.Errorf("%w: GET %s: next page link to %s points outside the API",
+			ErrInvalidNextLink, current.Path, origin(next))
 	}
 	return next, nil
 }
