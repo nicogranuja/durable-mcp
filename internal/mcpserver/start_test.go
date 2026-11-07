@@ -25,8 +25,8 @@ func TestStartReportValidation(t *testing.T) {
 		in   StartReportInput
 		want string
 	}{
-		{name: "missing owner", in: StartReportInput{Repo: "widgets"}, want: "owner and repo are required"},
-		{name: "path in repo", in: StartReportInput{Owner: "acme", Repo: "widgets/../../user"}, want: "is not a valid GitHub repository"},
+		{name: "missing owner", in: StartReportInput{Repo: "widgets"}, want: "owner is required"},
+		{name: "path in repo", in: StartReportInput{Owner: "acme", Repo: "widgets/../../user"}, want: `repo "widgets/../../user" contains '/'`},
 		{name: "unparsable since", in: StartReportInput{Owner: "acme", Repo: "widgets", Since: "last week"}, want: `since "last week" is not a date or time`},
 		{name: "unparsable until", in: StartReportInput{Owner: "acme", Repo: "widgets", Until: "2026-13-01"}, want: `until "2026-13-01" is not a date or time`},
 		{
@@ -41,13 +41,44 @@ func TestStartReportValidation(t *testing.T) {
 		},
 		{
 			name: "control character in key",
-			in:   StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: "key\n"},
-			want: "idempotency_key must be at most 200 characters of printable text",
+			in:   StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: "report-key\n"},
+			want: `idempotency_key must be 8 to 128 characters of ASCII letters, digits, '-', '_', '.', or ':', such as a UUID you generate for each new report; got '\n' at position 11`,
+		},
+		{
+			name: "space in key",
+			in:   StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: "my report"},
+			want: "got ' ' at position 3",
+		},
+		{
+			name: "look-alike Unicode in key",
+			in:   StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: "rep\u043ert-key"}, // Cyrillic o
+			want: "got 'о' at position 4",
+		},
+		{
+			name: "key too short",
+			in:   StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: "k-1"},
+			want: "got 3 characters",
 		},
 		{
 			name: "key too long",
-			in:   StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: strings.Repeat("k", 201)},
-			want: "idempotency_key must be at most 200 characters",
+			in:   StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: strings.Repeat("k", 129)},
+			want: "got 129 characters",
+		},
+		{
+			name: "every problem at once",
+			in:   StartReportInput{Owner: "-acme", Repo: "widgets.git", Since: "yesterday", IdempotencyKey: "k"},
+			want: `owner "-acme" is not a GitHub account name: use letters, digits, and hyphens, not starting with a hyphen; ` +
+				`repo "widgets.git" ends in .git`,
+		},
+		{
+			name: "every problem at once, with the time and key",
+			in:   StartReportInput{Owner: "acme", Repo: "widgets", Since: "yesterday", IdempotencyKey: "k"},
+			want: `since "yesterday" is not a date or time`,
+		},
+		{
+			name: "since in the future",
+			in:   StartReportInput{Owner: "acme", Repo: "widgets", Since: "2999-01-01"},
+			want: "is in the future",
 		},
 	}
 	for _, tt := range tests {
@@ -260,8 +291,8 @@ func TestStartReportKeyOfForeignJob(t *testing.T) {
 	// A report workflow with the key's ID that start_report did not start,
 	// so it has no fingerprint, is not returned as the caller's job.
 	f := newFakeClient()
-	f.add(jobIDForKey("k"), enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING)
-	_, out, err := newTools(f).startReport(t.Context(), nil, StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: "k"})
+	f.add(jobIDForKey("foreign-key-1"), enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING)
+	_, out, err := newTools(f).startReport(t.Context(), nil, StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: "foreign-key-1"})
 	if err == nil || !strings.Contains(err.Error(), "already used to start a report with different arguments") {
 		t.Errorf("startReport() = %+v, %v; want an error about the key", out, err)
 	}
@@ -277,7 +308,7 @@ func TestStartReportTimeout(t *testing.T) {
 		t.Parallel()
 		f := newFakeClient()
 		f.startErr = serviceerror.NewDeadlineExceeded("context deadline exceeded")
-		_, _, err := newTools(f).startReport(t.Context(), nil, StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: "k-1"})
+		_, _, err := newTools(f).startReport(t.Context(), nil, StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: "timeout-key-1"})
 		if err == nil || !strings.Contains(err.Error(), "may or may not have started. Retry this call in a few seconds with the same arguments and idempotency_key") {
 			t.Errorf("startReport() error = %v, want advice to retry with the same key", err)
 		}

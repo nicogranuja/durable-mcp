@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/nicogranuja/durable-mcp/internal/report"
@@ -22,7 +21,8 @@ import (
 const (
 	jobIDPrefix  = "report-"
 	jobIDLen     = len(jobIDPrefix) + 26
-	maxKeyLength = 200
+	minKeyLength = 8
+	maxKeyLength = 128
 )
 
 // idEncoding is lowercase base32 without padding. Lowercase reads better
@@ -54,13 +54,28 @@ func validateJobID(id string) error {
 	return nil
 }
 
-// validateKey checks an idempotency key.
+// validateKey checks an idempotency key: minKeyLength to maxKeyLength
+// ASCII letters, digits, '-', '_', '.', and ':'. That fits UUIDs, ULIDs,
+// and most generated IDs, and keeps keys free of whitespace, control
+// characters, and look-alike Unicode, which would make two keys that read
+// the same name different jobs. A short key is likelier to be reused by
+// accident for a different report.
 func validateKey(key string) error {
-	if !utf8.ValidString(key) || utf8.RuneCountInString(key) > maxKeyLength ||
-		strings.ContainsFunc(key, unicode.IsControl) {
-		return fmt.Errorf("idempotency_key must be at most %d characters of printable text, such as a UUID", maxKeyLength)
+	const rule = "idempotency_key must be %d to %d characters of ASCII letters, digits, '-', '_', '.', or ':', " +
+		"such as a UUID you generate for each new report"
+	switch {
+	case len(key) < minKeyLength || len(key) > maxKeyLength:
+		return fmt.Errorf(rule+"; got %d characters", minKeyLength, maxKeyLength, utf8.RuneCountInString(key))
+	case strings.ContainsFunc(key, func(r rune) bool { return !isKeyChar(r) }):
+		i := strings.IndexFunc(key, func(r rune) bool { return !isKeyChar(r) })
+		r, _ := utf8.DecodeRuneInString(key[i:])
+		return fmt.Errorf(rule+"; got %q at position %d", minKeyLength, maxKeyLength, r, utf8.RuneCountInString(key[:i])+1)
 	}
 	return nil
+}
+
+func isKeyChar(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' || r == ':'
 }
 
 // fingerprint identifies the request a job was started for, so that a

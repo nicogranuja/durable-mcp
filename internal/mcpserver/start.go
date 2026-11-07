@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -28,7 +29,7 @@ issues opened and closed (and how), pull requests opened, merged, and closed, me
 Returns a job_id immediately; the report itself runs durably on the server and can take from seconds to hours
 (large repositories have many pages, and GitHub rate limits can force waits). Follow it with job_status and fetch it with job_result.
 
-The window defaults to the 30 days before the job starts and can be at most 366 days long.
+The window defaults to the 30 days before the job starts and can be at most 366 days long; it cannot start in the future.
 
 Always pass an idempotency_key, a fresh UUID you generate for each new report, and reuse it if you retry this call:
 a retry with the same key and arguments returns the same job instead of starting a second one, even after the job finished,
@@ -43,11 +44,11 @@ Reusing a key with different arguments is an error.`,
 
 // StartReportInput is the input of start_report.
 type StartReportInput struct {
-	Owner          string `json:"owner" jsonschema:"Repository owner: the user or organization in github.com/OWNER/REPO, such as temporalio."`
-	Repo           string `json:"repo" jsonschema:"Repository name: REPO in github.com/OWNER/REPO, such as sdk-go."`
+	Owner          string `json:"owner" jsonschema:"Repository owner: the user or organization in github.com/OWNER/REPO, such as temporalio. Up to 39 letters, digits, and hyphens."`
+	Repo           string `json:"repo" jsonschema:"Repository name: REPO in github.com/OWNER/REPO, such as sdk-go, without .git. Up to 100 letters, digits, '-', '_', and '.'."`
 	Since          string `json:"since,omitempty" jsonschema:"Start of the window, inclusive. An RFC 3339 time such as 2026-10-01T00:00:00Z, or a date such as 2026-10-01 (midnight UTC). Defaults to 30 days before until."`
 	Until          string `json:"until,omitempty" jsonschema:"End of the window, exclusive, in the same formats as since. Defaults to the time the job starts."`
-	IdempotencyKey string `json:"idempotency_key,omitempty" jsonschema:"Key, up to 200 characters, that makes retries safe: calls with the same key and arguments return the same job. Use a fresh UUID for each new report and the same one when retrying."`
+	IdempotencyKey string `json:"idempotency_key,omitempty" jsonschema:"Key that makes retries safe: calls with the same key and arguments return the same job. 8 to 128 ASCII letters, digits, '-', '_', '.', or ':'. Use a fresh UUID for each new report and the same one when retrying."`
 }
 
 // StartReportOutput is the result of start_report.
@@ -58,17 +59,31 @@ type StartReportOutput struct {
 	Message string `json:"message" jsonschema:"What happened and what to do next."`
 }
 
-// request converts the tool input to a workflow request.
-func (in StartReportInput) request() (report.Request, error) {
-	since, err := parseTime("since", in.Since)
-	if err != nil {
-		return report.Request{}, err
+// validate checks the tool input as of now and converts it to a workflow
+// request. The error lists every problem, so an agent can fix them all in
+// one go.
+func (in StartReportInput) validate(now time.Time) (report.Request, error) {
+	var problems []string
+	since, sinceErr := parseTime("since", in.Since)
+	until, untilErr := parseTime("until", in.Until)
+	for _, err := range []error{sinceErr, untilErr} {
+		if err != nil {
+			problems = append(problems, err.Error())
+		}
 	}
-	until, err := parseTime("until", in.Until)
-	if err != nil {
-		return report.Request{}, err
+	req := report.Request{Owner: in.Owner, Repo: in.Repo, Since: since, Until: until}
+	if err := req.Validate(now); err != nil {
+		problems = append(problems, err.Error())
 	}
-	return report.Request{Owner: in.Owner, Repo: in.Repo, Since: since, Until: until}, nil
+	if in.IdempotencyKey != "" {
+		if err := validateKey(in.IdempotencyKey); err != nil {
+			problems = append(problems, err.Error())
+		}
+	}
+	if len(problems) > 0 {
+		return report.Request{}, errors.New(strings.Join(problems, "; "))
+	}
+	return req, nil
 }
 
 // parseTime parses an RFC 3339 time or a date, as UTC midnight. An empty
@@ -119,18 +134,12 @@ func (t *tools) startOptions(jobID, fp string, req report.Request) client.StartW
 }
 
 func (t *tools) startReport(ctx context.Context, _ *mcp.CallToolRequest, in StartReportInput) (*mcp.CallToolResult, StartReportOutput, error) {
-	req, err := in.request()
+	req, err := in.validate(time.Now())
 	if err != nil {
-		return nil, StartReportOutput{}, inputError(err)
-	}
-	if err := req.Validate(time.Now()); err != nil {
 		return nil, StartReportOutput{}, inputError(err)
 	}
 	jobID := newJobID()
 	if in.IdempotencyKey != "" {
-		if err := validateKey(in.IdempotencyKey); err != nil {
-			return nil, StartReportOutput{}, inputError(err)
-		}
 		jobID = jobIDForKey(in.IdempotencyKey)
 	}
 	fp := fingerprint(req)

@@ -107,34 +107,6 @@ func TestResolve(t *testing.T) {
 	}
 }
 
-func TestValidate(t *testing.T) {
-	t.Parallel()
-
-	now := window.Until
-	tests := []struct {
-		name    string
-		req     Request
-		wantErr string
-	}{
-		{name: "valid", req: Request{Owner: "acme", Repo: "widgets"}},
-		{name: "valid window", req: Request{Owner: "acme", Repo: "widgets.go", Since: window.Since, Until: window.Until}},
-		{name: "missing repo", req: Request{Owner: "acme"}, wantErr: "owner and repo are required"},
-		{name: "bad window", req: Request{Owner: "acme", Repo: "widgets", Since: now}, wantErr: "must be before until"},
-		{name: "path in repo", req: Request{Owner: "acme", Repo: "widgets/issues"}, wantErr: `"acme"/"widgets/issues" is not a valid GitHub repository`},
-		{name: "dot segment", req: Request{Owner: "..", Repo: "widgets"}, wantErr: "is not a valid GitHub repository"},
-		{name: "space", req: Request{Owner: "acme corp", Repo: "widgets"}, wantErr: "is not a valid GitHub repository"},
-	}
-	for _, tt := range tests {
-		err := tt.req.Validate(now)
-		switch {
-		case tt.wantErr == "" && err != nil:
-			t.Errorf("%s: Validate() = %v, want nil", tt.name, err)
-		case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
-			t.Errorf("%s: Validate() = %v, want it to contain %q", tt.name, err, tt.wantErr)
-		}
-	}
-}
-
 func TestWindowContains(t *testing.T) {
 	t.Parallel()
 
