@@ -25,7 +25,7 @@ func TestMiddleware(t *testing.T) {
 		if !ok || info == nil || info.UserID != c.Name {
 			t.Errorf("handler got caller %+v, %v and token info %+v, want both", c, ok, info)
 		}
-		w.Write([]byte("hello " + c.Name))
+		_, _ = w.Write([]byte("hello " + c.Name))
 	}))
 
 	tests := []struct {
@@ -44,7 +44,7 @@ func TestMiddleware(t *testing.T) {
 		{"huge token", "Bearer " + strings.Repeat("x", 10_000), http.StatusUnauthorized, `Bearer realm="durable-mcp"`, "missing bearer token"},
 	}
 	for _, tt := range tests {
-		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", nil)
 		if tt.header != "" {
 			req.Header.Set("Authorization", tt.header)
 		}

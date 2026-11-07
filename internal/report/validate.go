@@ -76,12 +76,12 @@ func validateOwner(owner string) error {
 		return errors.New("owner is required: the user or organization in github.com/OWNER/REPO")
 	case strings.Contains(owner, "/"):
 		return fmt.Errorf("owner %q contains '/': pass the owner and the repository name separately, "+
-			"as in github.com/OWNER/REPO", truncate(owner, 60))
+			"as in github.com/OWNER/REPO", echo(owner))
 	case len(owner) > maxOwnerLength:
-		return fmt.Errorf("owner %q is longer than GitHub's %d-character limit", truncate(owner, 60), maxOwnerLength)
+		return fmt.Errorf("owner %q is longer than GitHub's %d-character limit", echo(owner), maxOwnerLength)
 	case owner[0] == '-' || strings.ContainsFunc(owner, func(r rune) bool { return !isNameChar(r) || r == '.' }):
 		return fmt.Errorf("owner %q is not a GitHub account name: use letters, digits, and hyphens, "+
-			"not starting with a hyphen", truncate(owner, 60))
+			"not starting with a hyphen", echo(owner))
 	}
 	return nil
 }
@@ -93,15 +93,15 @@ func validateRepo(repo string) error {
 		return errors.New("repo is required: the repository name, REPO in github.com/OWNER/REPO")
 	case strings.Contains(repo, "/"):
 		return fmt.Errorf("repo %q contains '/': pass only the repository name, REPO in github.com/OWNER/REPO, "+
-			"and the owner separately", truncate(repo, 60))
+			"and the owner separately", echo(repo))
 	case len(repo) > maxRepoLength:
-		return fmt.Errorf("repo %q is longer than GitHub's %d-character limit", truncate(repo, 60), maxRepoLength)
+		return fmt.Errorf("repo %q is longer than GitHub's %d-character limit", echo(repo), maxRepoLength)
 	case repo == "." || repo == "..":
 		return fmt.Errorf("repo %q is not a repository name", repo)
 	case strings.HasSuffix(strings.ToLower(repo), ".git"):
-		return fmt.Errorf("repo %q ends in .git: pass the name without it, as in github.com/OWNER/REPO", truncate(repo, 60))
+		return fmt.Errorf("repo %q ends in .git: pass the name without it, as in github.com/OWNER/REPO", echo(repo))
 	case strings.ContainsFunc(repo, func(r rune) bool { return !isNameChar(r) }):
-		return fmt.Errorf("repo %q is not a GitHub repository name: use letters, digits, '-', '_', and '.'", truncate(repo, 60))
+		return fmt.Errorf("repo %q is not a GitHub repository name: use letters, digits, '-', '_', and '.'", echo(repo))
 	}
 	return nil
 }
@@ -110,8 +110,9 @@ func isNameChar(r rune) bool {
 	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.'
 }
 
-// truncate shortens s to at most n bytes, for echoing input in errors.
-func truncate(s string, n int) string {
+// echo shortens a name to at most 60 bytes, for quoting input in errors.
+func echo(s string) string {
+	const n = 60
 	if len(s) <= n {
 		return s
 	}
