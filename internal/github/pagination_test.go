@@ -424,8 +424,8 @@ func TestPagerNextLinkOrigin(t *testing.T) {
 			}
 			_, err = pager.NextPage(t.Context())
 			if tt.wantErr {
-				if err == nil || !strings.Contains(err.Error(), "points outside") {
-					t.Errorf("NextPage error = %v, want a refusal to follow the link", err)
+				if !errors.Is(err, github.ErrInvalidNextLink) || !strings.Contains(err.Error(), "points outside") {
+					t.Errorf("NextPage error = %v, want a refusal to follow the link (ErrInvalidNextLink)", err)
 				}
 				return
 			}

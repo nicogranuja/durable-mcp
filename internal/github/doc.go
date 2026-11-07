@@ -20,6 +20,14 @@
 // reports the cause instead, so the error wraps that, as it does when the
 // Temporal SDK cancels an activity.
 //
+// Some failures are deterministic: repeating the request gets the same
+// answer. Besides the 4xx statuses, they are a next-page link the client
+// will not follow ([ErrInvalidNextLink]), a redirect it refuses
+// ([ErrRedirectRefused]), a request it cannot build ([ErrBuildRequest]),
+// an oversized response ([ErrResponseTooLarge]), and invalid arguments
+// ([ErrInvalidArgument], including [ErrInvalidCursor]). Callers that retry
+// should not retry those.
+//
 // # Rate limits
 //
 // The client never sleeps and never retries. When GitHub rejects a request

@@ -190,14 +190,14 @@ const maxRedirects = 10
 func (c *Client) checkRedirect(next func(*http.Request, []*http.Request) error) func(*http.Request, []*http.Request) error {
 	return func(req *http.Request, via []*http.Request) error {
 		if !c.ownsURL(req.URL) {
-			return fmt.Errorf("refusing to follow redirect to %s, which is outside %s",
-				req.URL.Redacted(), c.baseURL.Redacted())
+			return fmt.Errorf("%w: refusing to follow redirect to %s, which is outside %s",
+				ErrRedirectRefused, req.URL.Redacted(), c.baseURL.Redacted())
 		}
 		if next != nil {
 			return next(req, via)
 		}
 		if len(via) >= maxRedirects {
-			return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			return fmt.Errorf("%w: stopped after %d redirects", ErrRedirectRefused, maxRedirects)
 		}
 		return nil
 	}
@@ -255,7 +255,7 @@ func (c *Client) get(ctx context.Context, u *url.URL) (*response, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), http.NoBody)
 	if err != nil {
-		return nil, fmt.Errorf("github: build request: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrBuildRequest, err)
 	}
 	req.Header.Set("Accept", mediaType)
 	req.Header.Set("X-GitHub-Api-Version", c.apiVersion)

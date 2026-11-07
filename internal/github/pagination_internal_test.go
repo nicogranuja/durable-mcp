@@ -1,6 +1,10 @@
 package github
 
-import "testing"
+import (
+	"errors"
+	"net/http"
+	"testing"
+)
 
 func TestNextLink(t *testing.T) {
 	t.Parallel()
@@ -83,5 +87,19 @@ func TestNextLink(t *testing.T) {
 				t.Errorf("nextLink(%q) = %q, want %q", tt.values, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNextPageURLMalformed(t *testing.T) {
+	t.Parallel()
+
+	c, err := New("", WithBaseURL("https://api.github.test/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := c.endpoint("repos", "acme", "widgets", "issues")
+	h := http.Header{"Link": []string{`<https://[::1/issues?page=2>; rel="next"`}}
+	if _, err := c.nextPageURL(h, current); !errors.Is(err, ErrInvalidNextLink) {
+		t.Errorf("nextPageURL() error = %v, want ErrInvalidNextLink", err)
 	}
 }

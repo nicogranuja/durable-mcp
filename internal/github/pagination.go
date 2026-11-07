@@ -264,12 +264,16 @@ func (c *Client) nextPageURL(h http.Header, current *url.URL) (*url.URL, error) 
 	}
 	ref, err := url.Parse(link)
 	if err != nil {
-		return nil, fmt.Errorf("github: GET %s: invalid next page link: %w", current.Path, err)
+		// url.Parse errors quote the whole link; keep only the reason.
+		if uerr, ok := errors.AsType[*url.Error](err); ok {
+			err = uerr.Err
+		}
+		return nil, fmt.Errorf("%w: GET %s: %w", ErrInvalidNextLink, current.Path, err)
 	}
 	next := current.ResolveReference(ref)
 	if !c.ownsURL(next) {
-		return nil, fmt.Errorf("github: GET %s: next page link %q points outside %s",
-			current.Path, next.Redacted(), c.baseURL.Redacted())
+		return nil, fmt.Errorf("%w: GET %s: next page link %q points outside %s",
+			ErrInvalidNextLink, current.Path, next.Redacted(), c.baseURL.Redacted())
 	}
 	return next, nil
 }

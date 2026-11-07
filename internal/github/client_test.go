@@ -649,6 +649,9 @@ func TestRedirects(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("GetRepository error = %v, want it to contain %q", err, tt.wantErr)
 				}
+				if !errors.Is(err, github.ErrRedirectRefused) {
+					t.Errorf("GetRepository error = %v, want it to match ErrRedirectRefused", err)
+				}
 				select {
 				case <-followed:
 					t.Error("the API server received the redirected request")

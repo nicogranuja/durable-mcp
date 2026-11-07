@@ -39,6 +39,20 @@ var (
 	// ErrInvalidArgument is returned for invalid method arguments, before
 	// any request is sent.
 	ErrInvalidArgument = errors.New("github: invalid argument")
+
+	// ErrInvalidNextLink is returned when a response's rel="next" link is
+	// malformed or points outside the API, so the client will not follow
+	// it. The same response would carry the same link again.
+	ErrInvalidNextLink = errors.New("github: invalid next page link")
+
+	// ErrRedirectRefused is returned when the API redirects a request
+	// outside itself, which the client refuses so that the token stays on
+	// the API, or redirects more than ten times in a row.
+	ErrRedirectRefused = errors.New("github: redirect refused")
+
+	// ErrBuildRequest is returned when the client cannot build an HTTP
+	// request at all, which no retry can change.
+	ErrBuildRequest = errors.New("github: cannot build request")
 )
 
 // APIError describes a non-2xx response from the GitHub API that is not a
