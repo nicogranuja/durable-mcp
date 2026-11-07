@@ -263,10 +263,10 @@ func TestActivitiesHeartbeatDuringSlowRequests(t *testing.T) {
 	if err := env.GetWorkflowError(); err != nil {
 		t.Fatalf("workflow failed: %v", err)
 	}
-	if n := rec.count("FetchIssuesPage"); n < 2 {
+	if n := rec.count(report.ActivityFetchIssuesPage); n < 2 {
 		t.Errorf("FetchIssuesPage recorded %d heartbeats during a 3-second request, want at least 2", n)
 	}
-	if n := rec.count("FetchCommitsPage"); n != 1 {
+	if n := rec.count(report.ActivityFetchCommitsPage); n != 1 {
 		t.Errorf("FetchCommitsPage recorded %d heartbeats during a fast request, want 1", n)
 	}
 }

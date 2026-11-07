@@ -1,12 +1,12 @@
 package report
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"time"
 
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -20,10 +20,39 @@ const DefaultTaskQueue = "durable-mcp"
 // Progress.
 const ProgressQuery = "progress"
 
+// activityPrefix starts the name of every report activity, so that the
+// names cannot collide with another worker's activities on a shared task
+// queue.
+const activityPrefix = "report."
+
+// Activity type names: the Activities methods, with activityPrefix. The
+// workflow schedules activities by these names, and they show up in the
+// Temporal UI, in job_status, and in metrics.
+const (
+	ActivityFetchRepository       = activityPrefix + "FetchRepository"
+	ActivityFetchIssuesPage       = activityPrefix + "FetchIssuesPage"
+	ActivityFetchPullRequestsPage = activityPrefix + "FetchPullRequestsPage"
+	ActivityFetchCommitsPage      = activityPrefix + "FetchCommitsPage"
+)
+
 // Register registers the RepositoryReport workflow and the report
 // activities with a worker.
+//
+// The activities are registered twice: under their prefixed names, and
+// under the unprefixed names they had before the prefix. Renaming them did
+// not need a workflow.GetVersion guard, because the Go SDK matches an
+// activity in history to the workflow's command by the part of the name
+// after the last dot, so a run started before the rename replays as before
+// (TestReplayRecordedHistory checks this). But activities scheduled before
+// the upgrade keep their old names on the server and are dispatched by
+// them. The unprefixed registration can go once no run started before the
+// rename is open, at most a job timeout (a day) after the upgrade.
+//
+// The workflow schedules activities by name, never by function, so the
+// worker should set worker.Options.DisableRegistrationAliasing.
 func Register(r worker.Registry, acts *Activities) {
 	r.RegisterWorkflow(RepositoryReport)
+	r.RegisterActivityWithOptions(acts, activity.RegisterOptions{Name: activityPrefix})
 	r.RegisterActivity(acts)
 }
 
@@ -152,12 +181,11 @@ func RepositoryReport(ctx workflow.Context, req Request) (_ Report, err error) {
 		return Report{}, temporal.NewNonRetryableApplicationError(err.Error(), ErrorTypeInvalidRequest, nil)
 	}
 	ctx = workflow.WithActivityOptions(ctx, activityOptions())
-	var a *Activities // only names the activities; the worker's instance runs them
 
 	progress.Phase = PhaseRepository
 	r := Report{Window: window}
 	repoCtx := withSummary(ctx, req.Owner+"/"+req.Repo)
-	err = workflow.ExecuteActivity(repoCtx, a.FetchRepository, RepositoryRequest{Owner: req.Owner, Repo: req.Repo}).
+	err = workflow.ExecuteActivity(repoCtx, ActivityFetchRepository, RepositoryRequest{Owner: req.Owner, Repo: req.Repo}).
 		Get(repoCtx, &r.Repository)
 	if err != nil {
 		return Report{}, err
@@ -166,7 +194,7 @@ func RepositoryReport(ctx workflow.Context, req Request) (_ Report, err error) {
 	first := PageRequest{Owner: req.Owner, Repo: req.Repo, Window: window}
 
 	progress.Phase = PhaseIssues
-	r.Issues.Truncated, err = fetchAll(ctx, resourceIssues, a.FetchIssuesPage, first, maxPages, func(s IssueStats) {
+	r.Issues.Truncated, err = fetchAll(ctx, resourceIssues, ActivityFetchIssuesPage, first, maxPages, func(s IssueStats) {
 		r.Issues.add(s)
 		progress.Pages.Issues++
 	})
@@ -176,7 +204,7 @@ func RepositoryReport(ctx workflow.Context, req Request) (_ Report, err error) {
 
 	progress.Phase = PhasePullRequests
 	var prs PullRequestStats
-	truncated, err := fetchAll(ctx, resourcePullRequests, a.FetchPullRequestsPage, first, maxPages, func(s PullRequestStats) {
+	truncated, err := fetchAll(ctx, resourcePullRequests, ActivityFetchPullRequestsPage, first, maxPages, func(s PullRequestStats) {
 		prs.add(s)
 		progress.Pages.PullRequests++
 	})
@@ -187,7 +215,7 @@ func RepositoryReport(ctx workflow.Context, req Request) (_ Report, err error) {
 
 	progress.Phase = PhaseCommits
 	var commits CommitStats
-	truncated, err = fetchAll(ctx, resourceCommits, a.FetchCommitsPage, first, maxPages, func(s CommitStats) {
+	truncated, err = fetchAll(ctx, resourceCommits, ActivityFetchCommitsPage, first, maxPages, func(s CommitStats) {
 		commits.add(s)
 		progress.Pages.Commits++
 	})
@@ -199,17 +227,17 @@ func RepositoryReport(ctx workflow.Context, req Request) (_ Report, err error) {
 	return r, nil
 }
 
-// fetchAll runs activity once per page of a resource, starting at the
-// first page and following each page's Next cursor, and passes each page's
-// partial aggregate to add. It stops after the last page or after maxPages
-// pages, and reports whether it stopped with pages left.
+// fetchAll runs the named activity once per page of a resource, starting
+// at the first page and following each page's Next cursor, and passes each
+// page's partial aggregate to add. It stops after the last page or after
+// maxPages pages, and reports whether it stopped with pages left.
 //
 // Pages are fetched one at a time because each page's cursor comes from the
 // page before it.
 func fetchAll[S any](
 	ctx workflow.Context,
 	resource string,
-	activity func(context.Context, PageRequest) (Page[S], error),
+	activity string,
 	req PageRequest,
 	maxPages int,
 	add func(S),

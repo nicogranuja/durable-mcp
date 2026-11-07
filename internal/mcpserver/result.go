@@ -20,8 +20,9 @@ var jobResultTool = &mcp.Tool{
 
 If the job completed, the result has the report. If it is still running, the result says so (status running, no report):
 call job_status to follow it and job_result again once it completes. If it failed, the result explains why
-(failure.type is RateLimited, Unavailable, Unauthorized, Forbidden, NotFound, ValidationFailed, RequestRejected,
-ResponseTooLarge, InvalidRequest, LinkRefused, Internal, Timeout, or Unknown) and failure.retryable says whether starting a new report later could succeed.
+(failure.type is report.RateLimited, report.Unavailable, report.Unauthorized, report.Forbidden, report.NotFound,
+report.ValidationFailed, report.RequestRejected, report.ResponseTooLarge, report.InvalidRequest, report.LinkRefused,
+report.Internal, Timeout, or Unknown) and failure.retryable says whether starting a new report later could succeed.
 A canceled, terminated, or timed-out job has no report.`,
 	OutputSchema: outputSchema[JobResultOutput](map[string][]any{"status": jobStates}),
 	Annotations: &mcp.ToolAnnotations{
@@ -67,7 +68,7 @@ func (t *tools) jobResult(ctx context.Context, _ *mcp.CallToolRequest, in JobInp
 		out.Message = "The job was terminated by an operator, so there is no report. Start a new report if you still need one."
 		return nil, out, nil
 	case statusTimedOut:
-		out.Failure = &JobFailure{Type: "Timeout", Message: fmt.Sprintf("the job ran longer than its %s limit", JobTimeout), Retryable: true}
+		out.Failure = &JobFailure{Type: failureTimeout, Message: fmt.Sprintf("the job ran longer than its %s limit", JobTimeout), Retryable: true}
 		out.Message = "The job timed out, so there is no report. Start a new report, perhaps with a shorter window, if you still need one."
 		return nil, out, nil
 	case statusCompleted, statusFailed:
@@ -113,54 +114,80 @@ func isCallError(ctx context.Context, err error) bool {
 	return isService || ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
+// Failure types that are not report error types.
+const (
+	failureTimeout = "Timeout"
+	failureUnknown = "Unknown"
+)
+
+// failureKind is what a job failure of one type means for the agent.
+type failureKind struct {
+	// retryable says whether a new report with the same arguments could
+	// succeed later.
+	retryable bool
+	// next tells the agent what to do.
+	next string
+}
+
+// failureKinds maps every failure type to its retry decision and next
+// step. TestFailureTaxonomy pins it, from GitHub's answer to the tool
+// result.
+var failureKinds = map[string]failureKind{
+	report.ErrorTypeRateLimited: {true, "GitHub's rate limit lasted longer than the job could wait. Start a new report later; " +
+		"if this keeps happening, the worker needs a GitHub token with a higher limit."},
+	report.ErrorTypeUnavailable: {true, "GitHub kept failing or did not respond. Start a new report in a few minutes."},
+	failureTimeout:              {true, "GitHub kept failing or did not respond. Start a new report in a few minutes."},
+	report.ErrorTypeUnauthorized: {false, "GitHub rejected the worker's token. Do not retry: the server's operator must fix GITHUB_TOKEN. " +
+		"Tell the user."},
+	report.ErrorTypeForbidden: {false, "The worker's GitHub token is not allowed to read this repository. Do not retry; tell the user."},
+	report.ErrorTypeNotFound: {false, "The repository does not exist, or is private and the worker's token cannot see it. " +
+		"Check owner and repo; do not retry the same request."},
+	report.ErrorTypeInvalidRequest:   {false, "The request was invalid. Fix the arguments before starting a new report."},
+	report.ErrorTypeValidationFailed: {false, "The request was invalid. Fix the arguments before starting a new report."},
+	report.ErrorTypeRequestRejected:  {false, "GitHub's answer cannot be used for this repository. Do not retry; tell the user."},
+	report.ErrorTypeResponseTooLarge: {false, "GitHub's answer cannot be used for this repository. Do not retry; tell the user."},
+	report.ErrorTypeLinkRefused: {false, "GitHub's answer pointed outside the worker's configured GitHub API URL, which the worker will not follow. " +
+		"Do not retry: the server's operator must check the worker's GitHub API URL. Tell the user."},
+	report.ErrorTypeInternal: {false, "The durable-mcp worker could not make the request, because of a bug or a configuration change. " +
+		"Do not retry; tell the user, with the job ID."},
+	failureUnknown: {false, "Starting a new report may not help; if it fails again, stop and tell the user, with the job ID."},
+}
+
+// failureType returns the failure type for an application error type:
+// the report error type it names, accepting the unprefixed types of older
+// runs, or Unknown, so that an agent only ever sees the types listed in
+// failureKinds.
+func failureType(appType string) string {
+	if t, ok := report.NormalizeErrorType(appType); ok {
+		return t
+	}
+	return failureUnknown
+}
+
 // classify describes why a job failed, from the application error that
 // caused it. Error values do not survive the trip through workflow history,
 // so the application error's type is what identifies the cause.
 func classify(err error) *JobFailure {
+	failure := func(t, msg string) *JobFailure {
+		return &JobFailure{Type: t, Message: truncate(msg, maxMessageLength), Retryable: failureKinds[t].retryable}
+	}
 	if appErr, ok := errors.AsType[*temporal.ApplicationError](err); ok {
-		errType := appErr.Type()
-		if errType == "" {
-			errType = "Unknown"
-		}
-		retryable := errType == report.ErrorTypeRateLimited || errType == report.ErrorTypeUnavailable
-		return &JobFailure{Type: errType, Message: truncate(appErr.Message(), maxMessageLength), Retryable: retryable}
+		return failure(failureType(appErr.Type()), appErr.Message())
 	}
 	if timeoutErr, ok := errors.AsType[*temporal.TimeoutError](err); ok {
-		return &JobFailure{Type: "Timeout", Message: truncate(timeoutErr.Message(), maxMessageLength), Retryable: true}
+		return failure(failureTimeout, timeoutErr.Message())
 	}
 	msg := err.Error()
 	if wfErr, ok := errors.AsType[*temporal.WorkflowExecutionError](err); ok && errors.Unwrap(wfErr) != nil {
 		msg = errors.Unwrap(wfErr).Error()
 	}
-	return &JobFailure{Type: "Unknown", Message: truncate(msg, maxMessageLength)}
+	return failure(failureUnknown, msg)
 }
 
 // nextStep tells the agent what to do about a failure of the given type.
-func nextStep(errType string) string {
-	switch errType {
-	case report.ErrorTypeRateLimited:
-		return "GitHub's rate limit lasted longer than the job could wait. Start a new report later; " +
-			"if this keeps happening, the worker needs a GitHub token with a higher limit."
-	case report.ErrorTypeUnavailable, "Timeout":
-		return "GitHub kept failing or did not respond. Start a new report in a few minutes."
-	case report.ErrorTypeUnauthorized:
-		return "GitHub rejected the worker's token. Do not retry: the server's operator must fix GITHUB_TOKEN. Tell the user."
-	case report.ErrorTypeForbidden:
-		return "The worker's GitHub token is not allowed to read this repository. Do not retry; tell the user."
-	case report.ErrorTypeNotFound:
-		return "The repository does not exist, or is private and the worker's token cannot see it. " +
-			"Check owner and repo; do not retry the same request."
-	case report.ErrorTypeInvalidRequest, report.ErrorTypeValidationFailed:
-		return "The request was invalid. Fix the arguments before starting a new report."
-	case report.ErrorTypeRequestRejected, report.ErrorTypeResponseTooLarge:
-		return "GitHub's answer cannot be used for this repository. Do not retry; tell the user."
-	case report.ErrorTypeLinkRefused:
-		return "GitHub's answer pointed outside the worker's configured GitHub API URL, which the worker will not follow. " +
-			"Do not retry: the server's operator must check the worker's GitHub API URL. Tell the user."
-	case report.ErrorTypeInternal:
-		return "The durable-mcp worker could not make the request, because of a bug or a configuration change. " +
-			"Do not retry; tell the user, with the job ID."
-	default:
-		return "Starting a new report may not help; if it fails again, stop and tell the user, with the job ID."
+func nextStep(failureType string) string {
+	if k, ok := failureKinds[failureType]; ok {
+		return k.next
 	}
+	return failureKinds[failureUnknown].next
 }

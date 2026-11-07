@@ -98,7 +98,7 @@ type JobStatusOutput struct {
 
 // StepStatus describes the activity that a running job is on.
 type StepStatus struct {
-	Name          string    `json:"name" jsonschema:"The step, such as FetchIssuesPage."`
+	Name          string    `json:"name" jsonschema:"The step, such as report.FetchIssuesPage."`
 	State         string    `json:"state" jsonschema:"scheduled (waiting to run or to retry), running, cancel_requested, or paused."`
 	Attempt       int32     `json:"attempt" jsonschema:"The current attempt, from 1."`
 	MaxAttempts   int32     `json:"max_attempts,omitempty"`
@@ -108,7 +108,7 @@ type StepStatus struct {
 
 // Failure is an error from a job or one of its steps.
 type Failure struct {
-	Type    string `json:"type,omitempty" jsonschema:"The error type, such as RateLimited, Unavailable, or NotFound."`
+	Type    string `json:"type,omitempty" jsonschema:"The error type, such as report.RateLimited, report.Unavailable, or report.NotFound."`
 	Message string `json:"message"`
 }
 
@@ -204,10 +204,10 @@ func failureOf(f *failurepb.Failure) *Failure {
 	}
 	for c := f; c != nil; c = c.GetCause() {
 		if app := c.GetApplicationFailureInfo(); app != nil {
-			return &Failure{Type: app.GetType(), Message: truncate(c.GetMessage(), maxMessageLength)}
+			return &Failure{Type: failureType(app.GetType()), Message: truncate(c.GetMessage(), maxMessageLength)}
 		}
 		if to := c.GetTimeoutFailureInfo(); to != nil {
-			return &Failure{Type: "Timeout", Message: truncate(c.GetMessage(), maxMessageLength)}
+			return &Failure{Type: failureTimeout, Message: truncate(c.GetMessage(), maxMessageLength)}
 		}
 	}
 	return &Failure{Message: truncate(f.GetMessage(), maxMessageLength)}

@@ -51,7 +51,11 @@
 //
 // Activities classify the GitHub client's errors into application errors
 // with stable types (ErrorTypeRateLimited and the other ErrorType
-// constants):
+// constants). Types and activity names start with "report.", such as
+// report.NotFound and report.FetchIssuesPage, so that they cannot collide
+// with another worker's on a shared task queue; see [Register] for how the
+// rename stays compatible with runs started before it. Each failure has one
+// type and one retry decision:
 //
 //   - A rate limit is retryable, with NextRetryDelay set from the time
 //     GitHub said the limit resets, so the next attempt runs then and not on

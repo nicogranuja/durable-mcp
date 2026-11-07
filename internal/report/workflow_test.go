@@ -19,9 +19,6 @@ import (
 	"github.com/nicogranuja/durable-mcp/internal/report"
 )
 
-// mocked names the activities in env.OnActivity, as the workflow does.
-var mocked *report.Activities
-
 // startTime is when test workflows start, on the test environment's clock.
 var startTime = time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 
@@ -31,6 +28,16 @@ func newWorkflowEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 	s.SetLogger(testLogger(t))
 	env := s.NewTestWorkflowEnvironment()
 	env.SetStartTime(startTime)
+	return env
+}
+
+// newMockedEnv returns a test environment for a test that mocks every
+// activity with env.OnActivity. Mocks by name need the activities
+// registered, but the registered ones never run.
+func newMockedEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
+	t.Helper()
+	env := newWorkflowEnv(t)
+	report.Register(env, &report.Activities{})
 	return env
 }
 
@@ -46,23 +53,23 @@ var repository = report.Repository{FullName: "acme/widgets", HTMLURL: "https://g
 // of issues and one page each of pull requests and commits. The pull
 // requests page takes prDelay on the test clock.
 func mockSmallRepository(env *testsuite.TestWorkflowEnvironment, prDelay time.Duration) {
-	env.OnActivity(mocked.FetchRepository, mock.Anything, report.RepositoryRequest{Owner: "acme", Repo: "widgets"}).
+	env.OnActivity(report.ActivityFetchRepository, mock.Anything, report.RepositoryRequest{Owner: "acme", Repo: "widgets"}).
 		Return(repository, nil).Once()
-	env.OnActivity(mocked.FetchIssuesPage, mock.Anything, pageReq("", 1)).
+	env.OnActivity(report.ActivityFetchIssuesPage, mock.Anything, pageReq("", 1)).
 		Return(report.Page[report.IssueStats]{
 			Stats: report.IssueStats{Opened: 3, Closed: 1, ClosedAs: report.CloseReasons{Completed: 1}, StillOpen: 2},
 			Next:  "issues-2",
 		}, nil).Once()
-	env.OnActivity(mocked.FetchIssuesPage, mock.Anything, pageReq("issues-2", 2)).
+	env.OnActivity(report.ActivityFetchIssuesPage, mock.Anything, pageReq("issues-2", 2)).
 		Return(report.Page[report.IssueStats]{
 			Stats: report.IssueStats{Opened: 1, Closed: 2, ClosedAs: report.CloseReasons{NotPlanned: 1, Other: 1}},
 		}, nil).Once()
-	env.OnActivity(mocked.FetchPullRequestsPage, mock.Anything, pageReq("", 1)).
+	env.OnActivity(report.ActivityFetchPullRequestsPage, mock.Anything, pageReq("", 1)).
 		After(prDelay).
 		Return(report.Page[report.PullRequestStats]{
 			Stats: report.PullRequestStats{Opened: 4, Merged: 3, ClosedUnmerged: 1, StillOpen: 1, MergeSeconds: []int64{3600, 60, 7200}},
 		}, nil).Once()
-	env.OnActivity(mocked.FetchCommitsPage, mock.Anything, pageReq("", 1)).
+	env.OnActivity(report.ActivityFetchCommitsPage, mock.Anything, pageReq("", 1)).
 		Return(report.Page[report.CommitStats]{
 			Stats: report.CommitStats{
 				Total:        6,
@@ -76,7 +83,7 @@ func mockSmallRepository(env *testsuite.TestWorkflowEnvironment, prDelay time.Du
 func TestRepositoryReport(t *testing.T) {
 	t.Parallel()
 
-	env := newWorkflowEnv(t)
+	env := newMockedEnv(t)
 	mockSmallRepository(env, 0)
 
 	env.ExecuteWorkflow(report.RepositoryReport, request)
@@ -142,11 +149,11 @@ func TestRepositoryReportDefaultWindow(t *testing.T) {
 		return r.Window.Since.Equal(want.Since) && r.Window.Until.Equal(want.Until)
 	})
 
-	env := newWorkflowEnv(t)
-	env.OnActivity(mocked.FetchRepository, mock.Anything, mock.Anything).Return(repository, nil)
-	env.OnActivity(mocked.FetchIssuesPage, mock.Anything, inWindow).Return(report.Page[report.IssueStats]{}, nil).Once()
-	env.OnActivity(mocked.FetchPullRequestsPage, mock.Anything, mock.Anything).Return(report.Page[report.PullRequestStats]{}, nil)
-	env.OnActivity(mocked.FetchCommitsPage, mock.Anything, mock.Anything).Return(report.Page[report.CommitStats]{}, nil)
+	env := newMockedEnv(t)
+	env.OnActivity(report.ActivityFetchRepository, mock.Anything, mock.Anything).Return(repository, nil)
+	env.OnActivity(report.ActivityFetchIssuesPage, mock.Anything, inWindow).Return(report.Page[report.IssueStats]{}, nil).Once()
+	env.OnActivity(report.ActivityFetchPullRequestsPage, mock.Anything, mock.Anything).Return(report.Page[report.PullRequestStats]{}, nil)
+	env.OnActivity(report.ActivityFetchCommitsPage, mock.Anything, mock.Anything).Return(report.Page[report.CommitStats]{}, nil)
 
 	env.ExecuteWorkflow(report.RepositoryReport, report.Request{Owner: "acme", Repo: "widgets"})
 
@@ -166,14 +173,14 @@ func TestRepositoryReportDefaultWindow(t *testing.T) {
 func TestRepositoryReportStopsAtThePageLimit(t *testing.T) {
 	t.Parallel()
 
-	env := newWorkflowEnv(t)
-	env.OnActivity(mocked.FetchRepository, mock.Anything, mock.Anything).Return(repository, nil)
+	env := newMockedEnv(t)
+	env.OnActivity(report.ActivityFetchRepository, mock.Anything, mock.Anything).Return(repository, nil)
 	// Every resource claims there is always another page.
-	env.OnActivity(mocked.FetchIssuesPage, mock.Anything, mock.Anything).
+	env.OnActivity(report.ActivityFetchIssuesPage, mock.Anything, mock.Anything).
 		Return(report.Page[report.IssueStats]{Stats: report.IssueStats{Opened: 1}, Next: "more"}, nil)
-	env.OnActivity(mocked.FetchPullRequestsPage, mock.Anything, mock.Anything).
+	env.OnActivity(report.ActivityFetchPullRequestsPage, mock.Anything, mock.Anything).
 		Return(report.Page[report.PullRequestStats]{Stats: report.PullRequestStats{Opened: 1}, Next: "more"}, nil)
-	env.OnActivity(mocked.FetchCommitsPage, mock.Anything, mock.Anything).
+	env.OnActivity(report.ActivityFetchCommitsPage, mock.Anything, mock.Anything).
 		Return(report.Page[report.CommitStats]{Stats: report.CommitStats{Total: 1}, Next: "more"}, nil)
 
 	req := request
@@ -190,8 +197,8 @@ func TestRepositoryReportStopsAtThePageLimit(t *testing.T) {
 	if got.Issues.Opened != 3 || got.PullRequests.Opened != 3 || got.Commits.Total != 3 {
 		t.Errorf("counts = %d, %d, %d; want 3 pages' worth each", got.Issues.Opened, got.PullRequests.Opened, got.Commits.Total)
 	}
-	env.AssertActivityNumberOfCalls(t, "FetchIssuesPage", 3)
-	env.AssertActivityNumberOfCalls(t, "FetchCommitsPage", 3)
+	env.AssertActivityNumberOfCalls(t, report.ActivityFetchIssuesPage, 3)
+	env.AssertActivityNumberOfCalls(t, report.ActivityFetchCommitsPage, 3)
 }
 
 func TestRepositoryReportRejectsInvalidRequests(t *testing.T) {
@@ -234,12 +241,12 @@ func assertFailed(t *testing.T, env *testsuite.TestWorkflowEnvironment, errType 
 func TestRepositoryReportCanceled(t *testing.T) {
 	t.Parallel()
 
-	env := newWorkflowEnv(t)
-	env.OnActivity(mocked.FetchRepository, mock.Anything, mock.Anything).Return(repository, nil)
-	env.OnActivity(mocked.FetchIssuesPage, mock.Anything, pageReq("", 1)).
+	env := newMockedEnv(t)
+	env.OnActivity(report.ActivityFetchRepository, mock.Anything, mock.Anything).Return(repository, nil)
+	env.OnActivity(report.ActivityFetchIssuesPage, mock.Anything, pageReq("", 1)).
 		Return(report.Page[report.IssueStats]{Next: "issues-2"}, nil).Once()
 	// The second page is slow; the report is canceled while it is in flight.
-	env.OnActivity(mocked.FetchIssuesPage, mock.Anything, pageReq("issues-2", 2)).
+	env.OnActivity(report.ActivityFetchIssuesPage, mock.Anything, pageReq("issues-2", 2)).
 		After(time.Hour).Return(report.Page[report.IssueStats]{}, nil).Once()
 
 	var canceled atomic.Bool
@@ -259,8 +266,8 @@ func TestRepositoryReportCanceled(t *testing.T) {
 	if elapsed := env.Now().Sub(startTime); elapsed >= time.Hour {
 		t.Errorf("workflow ran for %s; it should end when canceled, not wait for the activity", elapsed)
 	}
-	env.AssertActivityNumberOfCalls(t, "FetchPullRequestsPage", 0)
-	env.AssertActivityNumberOfCalls(t, "FetchCommitsPage", 0)
+	env.AssertActivityNumberOfCalls(t, report.ActivityFetchPullRequestsPage, 0)
+	env.AssertActivityNumberOfCalls(t, report.ActivityFetchCommitsPage, 0)
 
 	progress := queryProgress(t, env)
 	if want := (report.Progress{Phase: report.PhaseCanceled, Pages: report.PageCounts{Issues: 1}}); progress != want {
@@ -271,7 +278,7 @@ func TestRepositoryReportCanceled(t *testing.T) {
 func TestRepositoryReportProgressWhileRunning(t *testing.T) {
 	t.Parallel()
 
-	env := newWorkflowEnv(t)
+	env := newMockedEnv(t)
 	// The pull requests page takes an hour; look in on the report half way.
 	mockSmallRepository(env, time.Hour)
 
@@ -428,5 +435,28 @@ func TestRepositoryReportMissingRepository(t *testing.T) {
 	assertFailed(t, env, report.ErrorTypeNotFound)
 	if n := requests.Load(); n != 1 {
 		t.Errorf("GitHub got %d requests, want 1: a 404 is not retried and ends the report", n)
+	}
+}
+
+// The worker runs activities under their prefixed names and under the
+// unprefixed names that activities scheduled before the prefix still carry.
+func TestRegisterAddsPrefixedAndLegacyNames(t *testing.T) {
+	t.Parallel()
+
+	env := newWorkflowEnv(t)
+	report.Register(env, &report.Activities{})
+	for _, name := range []string{
+		report.ActivityFetchRepository, report.ActivityFetchIssuesPage,
+		report.ActivityFetchPullRequestsPage, report.ActivityFetchCommitsPage,
+		"FetchRepository", "FetchIssuesPage", "FetchPullRequestsPage", "FetchCommitsPage",
+	} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("activity %q is not registered: %v", name, r)
+				}
+			}()
+			env.OnActivity(name, mock.Anything, mock.Anything)
+		}()
 	}
 }

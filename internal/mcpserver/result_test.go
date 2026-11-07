@@ -21,7 +21,7 @@ func activityFailure(retryState enumspb.RetryState, cause error) error {
 	return fc.FailureToError(&failurepb.Failure{
 		Message: "activity error",
 		FailureInfo: &failurepb.Failure_ActivityFailureInfo{ActivityFailureInfo: &failurepb.ActivityFailureInfo{
-			ActivityType: &commonpb.ActivityType{Name: "FetchRepository"},
+			ActivityType: &commonpb.ActivityType{Name: report.ActivityFetchRepository},
 			RetryState:   retryState,
 		}},
 		Cause: fc.ErrorToFailure(cause),

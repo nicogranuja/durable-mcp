@@ -128,6 +128,8 @@ func serveWorker(ctx context.Context, cfg workerConfig, logger *slog.Logger) err
 	w := worker.New(c, cfg.temporal.taskQueue, worker.Options{
 		MaxConcurrentActivityExecutionSize: maxConcurrentActivities,
 		WorkerStopTimeout:                  workerStopTimeout,
+		// The workflow schedules activities by name; see report.Register.
+		DisableRegistrationAliasing: true,
 	})
 	report.Register(w, report.NewActivities(gh))
 

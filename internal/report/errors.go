@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/activity"
@@ -14,64 +16,92 @@ import (
 )
 
 // Types of the application errors that the report's activities and
-// workflow fail with. Go error values do not survive the trip through
-// workflow history, so callers classify a failed report with
-// errors.As(err, &appErr) and appErr.Type() instead.
+// workflow fail with, such as "report.NotFound". Go error values do not
+// survive the trip through workflow history, so callers classify a failed
+// report with errors.As(err, &appErr) and appErr.Type() instead.
+//
+// The "report." prefix, which activity names share, keeps the types apart
+// from other workers' on a shared task queue. Runs started before the
+// prefix have unprefixed types in their failures; [NormalizeErrorType] maps
+// them to the current ones.
 const (
 	// ErrorTypeRateLimited means GitHub's rate limit was hit. The activity
 	// is retried when GitHub says the limit resets.
-	ErrorTypeRateLimited = "RateLimited"
+	ErrorTypeRateLimited = "report.RateLimited"
 
 	// ErrorTypeUnavailable means GitHub answered with a 5xx status or the
 	// request failed in transit. The activity is retried with exponential
 	// backoff.
-	ErrorTypeUnavailable = "Unavailable"
+	ErrorTypeUnavailable = "report.Unavailable"
 
 	// ErrorTypeUnauthorized means GitHub rejected the token (401): it is
 	// missing, invalid, or expired. Not retried.
-	ErrorTypeUnauthorized = "Unauthorized"
+	ErrorTypeUnauthorized = "report.Unauthorized"
 
 	// ErrorTypeForbidden means the token lacks a permission the request
 	// needs (403, other than a rate limit). Not retried.
-	ErrorTypeForbidden = "Forbidden"
+	ErrorTypeForbidden = "report.Forbidden"
 
 	// ErrorTypeNotFound means the repository does not exist or the token
 	// cannot see it (404). Not retried.
-	ErrorTypeNotFound = "NotFound"
+	ErrorTypeNotFound = "report.NotFound"
 
 	// ErrorTypeValidationFailed means GitHub rejected the request
 	// parameters (422). Not retried.
-	ErrorTypeValidationFailed = "ValidationFailed"
+	ErrorTypeValidationFailed = "report.ValidationFailed"
 
 	// ErrorTypeRequestRejected means GitHub answered with another 4xx
 	// status, such as 451 for a repository blocked for legal reasons. Not
 	// retried. 408 Request Timeout is the exception: it is retried as
 	// ErrorTypeUnavailable.
-	ErrorTypeRequestRejected = "RequestRejected"
+	ErrorTypeRequestRejected = "report.RequestRejected"
 
 	// ErrorTypeResponseTooLarge means a page was larger than the client's
 	// response limit. Not retried: the same page would be as large again.
-	ErrorTypeResponseTooLarge = "ResponseTooLarge"
+	ErrorTypeResponseTooLarge = "report.ResponseTooLarge"
 
 	// ErrorTypeInvalidRequest means the report request was invalid, such as
 	// a malformed repository name or window, and nothing was sent to
 	// GitHub. Not retried.
-	ErrorTypeInvalidRequest = "InvalidRequest"
+	ErrorTypeInvalidRequest = "report.InvalidRequest"
 
 	// ErrorTypeLinkRefused means GitHub's answer pointed outside the
 	// configured API, through a next-page link or a redirect, and the client
 	// refused to follow it so that the token stays on the API. It usually
 	// means the worker's GitHub API URL is wrong, or a proxy rewrites links.
 	// Not retried: the same request gets the same answer.
-	ErrorTypeLinkRefused = "LinkRefused"
+	ErrorTypeLinkRefused = "report.LinkRefused"
 
 	// ErrorTypeInternal means the worker could not make the request at all:
 	// it could not build it, or a page cursor from the workflow's history
 	// does not belong to the worker's GitHub API URL, as after that URL
 	// changed mid-report. It is a bug or a configuration change, not
 	// something the request or GitHub can fix. Not retried.
-	ErrorTypeInternal = "Internal"
+	ErrorTypeInternal = "report.Internal"
 )
+
+// errorTypes lists every report error type.
+var errorTypes = []string{
+	ErrorTypeRateLimited, ErrorTypeUnavailable, ErrorTypeUnauthorized, ErrorTypeForbidden, ErrorTypeNotFound,
+	ErrorTypeValidationFailed, ErrorTypeRequestRejected, ErrorTypeResponseTooLarge, ErrorTypeInvalidRequest,
+	ErrorTypeLinkRefused, ErrorTypeInternal,
+}
+
+// ErrorTypes returns every report error type.
+func ErrorTypes() []string { return slices.Clone(errorTypes) }
+
+// NormalizeErrorType returns the report error type that t names, accepting
+// the unprefixed types of runs that started before the prefix, and reports
+// whether t is a report error type at all.
+func NormalizeErrorType(t string) (string, bool) {
+	if !strings.HasPrefix(t, activityPrefix) {
+		t = activityPrefix + t
+	}
+	if slices.Contains(errorTypes, t) {
+		return t, true
+	}
+	return "", false
+}
 
 const (
 	// minRetryDelay is the shortest delay before retrying a rate-limited

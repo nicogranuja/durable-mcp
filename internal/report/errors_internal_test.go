@@ -36,3 +36,24 @@ func TestRateLimitDelay(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeErrorType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		in, want string
+		ok       bool
+	}{
+		{ErrorTypeNotFound, ErrorTypeNotFound, true},
+		{"NotFound", ErrorTypeNotFound, true}, // a run from before the prefix
+		{"RateLimited", ErrorTypeRateLimited, true},
+		{"report.Bogus", "", false},
+		{"", "", false},
+		{"*errors.errorString", "", false},
+	}
+	for _, tt := range tests {
+		if got, ok := NormalizeErrorType(tt.in); got != tt.want || ok != tt.ok {
+			t.Errorf("NormalizeErrorType(%q) = %q, %v, want %q, %v", tt.in, got, ok, tt.want, tt.ok)
+		}
+	}
+}

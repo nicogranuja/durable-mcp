@@ -24,7 +24,7 @@ var testJobID = jobIDForKey("test")
 func pendingPage(errType string, attempt int32, next time.Time) *workflowpb.PendingActivityInfo {
 	a := &workflowpb.PendingActivityInfo{
 		ActivityId:      "5",
-		ActivityType:    &commonpb.ActivityType{Name: "FetchIssuesPage"},
+		ActivityType:    &commonpb.ActivityType{Name: report.ActivityFetchIssuesPage},
 		State:           enumspb.PENDING_ACTIVITY_STATE_SCHEDULED,
 		Attempt:         attempt,
 		MaximumAttempts: 10,
@@ -66,7 +66,7 @@ func TestJobStatusRunning(t *testing.T) {
 			},
 			want:     []string{"Running, in phase issues, with 3 issue, 0 pull request, and 0 commit pages fetched so far.", "Check again"},
 			not:      []string{"Waiting", "retried"},
-			wantStep: &StepStatus{Name: "FetchIssuesPage", State: "running", Attempt: 1, MaxAttempts: 10},
+			wantStep: &StepStatus{Name: report.ActivityFetchIssuesPage, State: "running", Attempt: 1, MaxAttempts: 10},
 		},
 		{
 			name: "rate limit wait",
@@ -79,8 +79,8 @@ func TestJobStatusRunning(t *testing.T) {
 			},
 			not: []string{"goroutine", "Check again"},
 			wantStep: &StepStatus{
-				Name: "FetchIssuesPage", State: "scheduled", Attempt: 2, MaxAttempts: 10, NextAttemptAt: resetAt,
-				LastFailure: &Failure{Type: report.ErrorTypeRateLimited, Message: "github: GET /repos/acme/widgets/issues: RateLimited"},
+				Name: report.ActivityFetchIssuesPage, State: "scheduled", Attempt: 2, MaxAttempts: 10, NextAttemptAt: resetAt,
+				LastFailure: &Failure{Type: report.ErrorTypeRateLimited, Message: "github: GET /repos/acme/widgets/issues: " + report.ErrorTypeRateLimited},
 			},
 		},
 		{
@@ -89,8 +89,8 @@ func TestJobStatusRunning(t *testing.T) {
 				j.pending = []*workflowpb.PendingActivityInfo{pendingPage(report.ErrorTypeUnavailable, 3, retryAt)}
 			},
 			want: []string{
-				"FetchIssuesPage failed on attempt 2 and will be retried at " + retryAt.Format(time.RFC3339),
-				": github: GET /repos/acme/widgets/issues: Unavailable. The job retries on its own.",
+				report.ActivityFetchIssuesPage + " failed on attempt 2 and will be retried at " + retryAt.Format(time.RFC3339),
+				": github: GET /repos/acme/widgets/issues: report.Unavailable. The job retries on its own.",
 			},
 			not: []string{"rate limit"},
 		},
@@ -100,7 +100,7 @@ func TestJobStatusRunning(t *testing.T) {
 				j.pending = []*workflowpb.PendingActivityInfo{pendingPage(report.ErrorTypeUnavailable, 3, time.Time{})}
 				j.pending[0].State = enumspb.PENDING_ACTIVITY_STATE_STARTED
 			},
-			want: []string{"FetchIssuesPage is on attempt 3 after: github: GET /repos/acme/widgets/issues: Unavailable."},
+			want: []string{report.ActivityFetchIssuesPage + " is on attempt 3 after: github: GET /repos/acme/widgets/issues: report.Unavailable."},
 		},
 		{
 			name:  "no worker answers",
