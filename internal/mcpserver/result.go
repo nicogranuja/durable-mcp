@@ -21,7 +21,7 @@ var jobResultTool = &mcp.Tool{
 If the job completed, the result has the report. If it is still running, the result says so (status running, no report):
 call job_status to follow it and job_result again once it completes. If it failed, the result explains why
 (failure.type is RateLimited, Unavailable, Unauthorized, Forbidden, NotFound, ValidationFailed, RequestRejected,
-ResponseTooLarge, InvalidRequest, Timeout, or Unknown) and failure.retryable says whether starting a new report later could succeed.
+ResponseTooLarge, InvalidRequest, LinkRefused, Internal, Timeout, or Unknown) and failure.retryable says whether starting a new report later could succeed.
 A canceled, terminated, or timed-out job has no report.`,
 	OutputSchema: outputSchema[JobResultOutput](map[string][]any{"status": jobStates}),
 	Annotations: &mcp.ToolAnnotations{
@@ -154,6 +154,12 @@ func nextStep(errType string) string {
 		return "The request was invalid. Fix the arguments before starting a new report."
 	case report.ErrorTypeRequestRejected, report.ErrorTypeResponseTooLarge:
 		return "GitHub's answer cannot be used for this repository. Do not retry; tell the user."
+	case report.ErrorTypeLinkRefused:
+		return "GitHub's answer pointed outside the worker's configured GitHub API URL, which the worker will not follow. " +
+			"Do not retry: the server's operator must check the worker's GitHub API URL. Tell the user."
+	case report.ErrorTypeInternal:
+		return "The durable-mcp worker could not make the request, because of a bug or a configuration change. " +
+			"Do not retry; tell the user, with the job ID."
 	default:
 		return "Starting a new report may not help; if it fails again, stop and tell the user, with the job ID."
 	}

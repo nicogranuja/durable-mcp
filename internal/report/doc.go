@@ -61,11 +61,13 @@
 //     when the next attempt is due. Secondary rate limits wait at least a
 //     backoff that doubles with each attempt at the page, as GitHub asks.
 //   - 401, 403, 404, 422, and other 4xx responses except 408, invalid
-//     arguments, and oversized pages are non-retryable: the same request
-//     cannot succeed, so the report fails at once with a type that says
-//     why.
-//   - 5xx responses and network errors are retried with the retry policy's
-//     exponential backoff.
+//     arguments, oversized pages, next-page links and redirects that leave
+//     the API, and requests that cannot be built are non-retryable: the
+//     same request cannot succeed, so the report fails at once with a type
+//     that says why.
+//   - 5xx and 408 responses, network errors, request timeouts, and bodies
+//     that do not decode are retried with the retry policy's exponential
+//     backoff.
 //
 // NextRetryDelay needs Temporal Server 1.24.2 or later. An older server
 // ignores it and retries a rate-limited page on the retry policy's backoff

@@ -55,7 +55,26 @@ func TestActivityErrors(t *testing.T) {
 			name:     "cursor for another repository",
 			handler:  respond(http.StatusOK, `[]`),
 			req:      report.PageRequest{Owner: "acme", Repo: "widgets", Window: window, Cursor: "/repos/acme/gadgets/issues?page=2"},
-			wantType: report.ErrorTypeInvalidRequest,
+			wantType: report.ErrorTypeInternal,
+		},
+		{
+			name:     "next page link off the API",
+			handler:  respond(http.StatusOK, `[]`, "Link", `<https://elsewhere.test/repos/acme/widgets/issues?page=2>; rel="next"`),
+			wantType: report.ErrorTypeLinkRefused,
+		},
+		{
+			name: "redirect off the API",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "https://elsewhere.test/repos/acme/widgets/issues", http.StatusFound)
+			},
+			wantType: report.ErrorTypeLinkRefused,
+		},
+		{
+			name: "redirect loop",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, r.URL.String(), http.StatusFound)
+			},
+			wantType: report.ErrorTypeLinkRefused,
 		},
 		{
 			name: "primary rate limit waits for the reset",

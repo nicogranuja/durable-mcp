@@ -57,6 +57,20 @@ const (
 	// a malformed repository name or window, and nothing was sent to
 	// GitHub. Not retried.
 	ErrorTypeInvalidRequest = "InvalidRequest"
+
+	// ErrorTypeLinkRefused means GitHub's answer pointed outside the
+	// configured API, through a next-page link or a redirect, and the client
+	// refused to follow it so that the token stays on the API. It usually
+	// means the worker's GitHub API URL is wrong, or a proxy rewrites links.
+	// Not retried: the same request gets the same answer.
+	ErrorTypeLinkRefused = "LinkRefused"
+
+	// ErrorTypeInternal means the worker could not make the request at all:
+	// it could not build it, or a page cursor from the workflow's history
+	// does not belong to the worker's GitHub API URL, as after that URL
+	// changed mid-report. It is a bug or a configuration change, not
+	// something the request or GitHub can fix. Not retried.
+	ErrorTypeInternal = "Internal"
 )
 
 const (
@@ -77,11 +91,14 @@ const (
 //     GitHub said the limit resets. The server waits that long before the
 //     next attempt, durably: no worker holds a slot or a goroutine while it
 //     waits, and the wait survives worker restarts.
-//   - A 4xx response other than 408, an invalid argument, or an oversized
-//     page is non-retryable, because repeating the same request cannot
-//     succeed.
-//   - Anything else, such as a 5xx response or a network error, is
-//     retryable with the retry policy's exponential backoff.
+//   - A 4xx response other than 408, an invalid argument, an oversized
+//     page, a next-page link or redirect off the API, or a request that
+//     cannot be built is non-retryable, because repeating the same request
+//     cannot succeed.
+//   - Anything else, such as a 5xx or 408 response, a network error, the
+//     client's own request timeout, or a body that is not the JSON
+//     expected, is retryable with the retry policy's exponential backoff:
+//     another attempt can get a different answer.
 func activityError(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
@@ -119,6 +136,12 @@ func activityError(ctx context.Context, err error) error {
 // fix.
 func nonRetryableType(err error) (string, bool) {
 	switch {
+	// Before ErrInvalidArgument, which it also matches: a cursor comes from
+	// the workflow's history, not from the request.
+	case errors.Is(err, github.ErrInvalidCursor), errors.Is(err, github.ErrBuildRequest), errors.Is(err, github.ErrPageLimit):
+		return ErrorTypeInternal, true
+	case errors.Is(err, github.ErrInvalidNextLink), errors.Is(err, github.ErrRedirectRefused):
+		return ErrorTypeLinkRefused, true
 	case errors.Is(err, github.ErrUnauthorized):
 		return ErrorTypeUnauthorized, true
 	case errors.Is(err, github.ErrForbidden):
