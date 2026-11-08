@@ -144,6 +144,12 @@ func (t *tools) register(s *mcp.Server) {
 // so that a caller cannot learn whether another caller's job exists. The
 // type check keeps the tools to report jobs, so cancel_job cannot cancel
 // other workflows in the namespace.
+//
+// Both answers take one DescribeWorkflowExecution call, and neither runs a
+// query, so they take about as long; Temporal may answer an unknown ID a
+// little faster than it describes a job. That could only confirm a job ID
+// the caller already has, and job IDs are 128-bit and unguessable: they
+// show in Temporal and in the operator's logs, not to other callers.
 func (t *tools) describeJob(ctx context.Context, op, jobID string) (*workflowservice.DescribeWorkflowExecutionResponse, error) {
 	resp, err := t.lookupJob(ctx, op, jobID)
 	switch {
