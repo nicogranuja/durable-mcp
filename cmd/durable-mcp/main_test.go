@@ -43,7 +43,7 @@ func TestRun(t *testing.T) {
 			name:       "serve refuses a public address",
 			args:       []string{"serve", "-transport", "http", "-http-addr", "0.0.0.0:8080"},
 			wantCode:   2,
-			wantStderr: `-http-addr "0.0.0.0:8080" is not a loopback address: the HTTP transport has no authentication yet`,
+			wantStderr: `-http-addr "0.0.0.0:8080" is not a loopback address: without auth tokens`,
 		},
 		{name: "serve extra argument", args: []string{"serve", "now"}, wantCode: 2, wantStderr: `unexpected arguments: ["now"]`},
 		{

@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -14,8 +18,25 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/nicogranuja/durable-mcp/internal/auth"
 	"github.com/nicogranuja/durable-mcp/internal/mcpserver"
 )
+
+// Test tokens are obviously fake: they are not in the minted format.
+const (
+	aliceToken = "test-token-alice-not-a-secret"
+	bobToken   = "test-token-bob-not-a-secret"
+)
+
+// tokensFile writes token entries to a file and returns its path.
+func tokensFile(t *testing.T, entries ...string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "tokens")
+	if err := os.WriteFile(path, []byte(strings.Join(entries, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 func TestParseServeFlags(t *testing.T) {
 	t.Parallel()
@@ -79,6 +100,143 @@ func TestParseServeFlags(t *testing.T) {
 				t.Errorf("parseServeFlags() = %+v, want %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseServeFlagsAuth(t *testing.T) {
+	t.Parallel()
+
+	file := tokensFile(t, "# callers", auth.Entry("alice", aliceToken), auth.Entry("bob", bobToken))
+	emptyFile := tokensFile(t, "# no callers yet")
+	list := auth.Entry("alice", aliceToken) + "," + auth.Entry("bob", bobToken)
+	http := []string{"-transport", "http"}
+
+	tests := []struct {
+		name        string
+		args        []string
+		env         map[string]string
+		wantCallers []string // nil: no tokens
+		wantIgnored string
+		wantErr     string
+	}{
+		{name: "no tokens", args: http},
+		{name: "file flag", args: append(http, "-auth-tokens-file", file), wantCallers: []string{"alice", "bob"}},
+		{name: "file from the environment", args: http, env: map[string]string{envAuthTokensFile: file}, wantCallers: []string{"alice", "bob"}},
+		{name: "list from the environment", args: http, env: map[string]string{envAuthTokens: list}, wantCallers: []string{"alice", "bob"}},
+		{
+			name:    "file flag and list",
+			args:    append(http, "-auth-tokens-file", file),
+			env:     map[string]string{envAuthTokens: list},
+			wantErr: "set either -auth-tokens-file (or DURABLE_MCP_AUTH_TOKENS_FILE) or DURABLE_MCP_AUTH_TOKENS, not both",
+		},
+		{
+			name:    "file and list from the environment",
+			args:    http,
+			env:     map[string]string{envAuthTokensFile: file, envAuthTokens: list},
+			wantErr: "not both",
+		},
+		{
+			name:    "both on stdio too",
+			env:     map[string]string{envAuthTokensFile: file, envAuthTokens: list},
+			wantErr: "not both",
+		},
+		{name: "stdio ignores a file", env: map[string]string{envAuthTokensFile: file}, wantIgnored: "-auth-tokens-file"},
+		{name: "stdio ignores a list", env: map[string]string{envAuthTokens: list}, wantIgnored: envAuthTokens},
+		{
+			// It is not even read.
+			name:        "stdio ignores a missing file",
+			args:        []string{"-auth-tokens-file", filepath.Join(t.TempDir(), "missing")},
+			wantIgnored: "-auth-tokens-file",
+		},
+		{name: "missing file", args: append(http, "-auth-tokens-file", filepath.Join(t.TempDir(), "missing")), wantErr: "read the auth tokens"},
+		{name: "empty file", args: append(http, "-auth-tokens-file", emptyFile), wantErr: "has no token entries"},
+		{name: "bad entry", args: http, env: map[string]string{envAuthTokens: "alice:abc"}, wantErr: "DURABLE_MCP_AUTH_TOKENS: entry 1"},
+		{
+			// A token pasted where its hash belongs is not echoed.
+			name:    "token instead of hash",
+			args:    http,
+			env:     map[string]string{envAuthTokens: "alice:" + auth.TokenPrefix + "notarealtokenatall"},
+			wantErr: "holds a token, not its hash",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var stderr bytes.Buffer
+			got, err := parseServeFlags(tt.args, env(tt.env), &stderr)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("parseServeFlags() error = %v, want one containing %q", err, tt.wantErr)
+				}
+				if strings.Contains(stderr.String(), auth.TokenPrefix+"notarealtokenatall") {
+					t.Errorf("stderr quotes the token: %s", stderr.String())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseServeFlags() error = %v (stderr: %s)", err, stderr.String())
+			}
+			var callers []string
+			if got.tokens != nil {
+				callers = got.tokens.Names()
+			}
+			if !slices.Equal(callers, tt.wantCallers) || (got.tokens == nil) != (tt.wantCallers == nil) {
+				t.Errorf("callers = %q, want %q", callers, tt.wantCallers)
+			}
+			if got.ignoredTokens != tt.wantIgnored {
+				t.Errorf("ignoredTokens = %q, want %q", got.ignoredTokens, tt.wantIgnored)
+			}
+		})
+	}
+}
+
+// TestBindRule checks that the HTTP transport listens beyond loopback only
+// with auth tokens, and warns that they travel over plain HTTP.
+func TestBindRule(t *testing.T) {
+	t.Parallel()
+
+	tokenEnv := map[string]string{envAuthTokens: auth.Entry("alice", aliceToken)}
+	tests := []struct {
+		name     string
+		addr     string
+		env      map[string]string
+		wantErr  bool
+		wantWarn bool
+	}{
+		{name: "loopback without tokens", addr: "127.0.0.1:8080"},
+		{name: "all interfaces without tokens", addr: "0.0.0.0:8080", wantErr: true},
+		{name: "private address without tokens", addr: "192.168.1.10:8080", wantErr: true},
+		{name: "loopback with tokens", addr: "[::1]:8080", env: tokenEnv},
+		{name: "all interfaces with tokens", addr: "0.0.0.0:8080", env: tokenEnv, wantWarn: true},
+		{name: "any host with tokens", addr: ":8080", env: tokenEnv, wantWarn: true},
+		{name: "not host:port, even with tokens", addr: "0.0.0.0", env: tokenEnv, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := parseServeFlags([]string{"-transport", "http", "-http-addr", tt.addr}, env(tt.env), io.Discard)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseServeFlags() error = %v, want an error: %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			var logs bytes.Buffer
+			logAuth(cfg, slog.New(slog.NewTextHandler(&logs, nil)))
+			if got := strings.Contains(logs.String(), "bearer tokens travel unencrypted"); got != tt.wantWarn {
+				t.Errorf("plain HTTP warning = %v, want %v; logs:\n%s", got, tt.wantWarn, logs.String())
+			}
+		})
+	}
+}
+
+func TestLogAuthStdio(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	logAuth(serveConfig{transport: transportStdio, ignoredTokens: envAuthTokens}, slog.New(slog.NewTextHandler(&logs, nil)))
+	if !strings.Contains(logs.String(), "Ignoring the auth tokens") || !strings.Contains(logs.String(), "Source="+envAuthTokens) {
+		t.Errorf("logs = %s, want a line saying the tokens are ignored", logs.String())
 	}
 }
 
@@ -185,7 +343,7 @@ type noTemporal struct{ mcpserver.Client }
 func TestHTTPHandler(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(httpHandler(mcpserver.New(noTemporal{}, mcpserver.Options{}), discardLogger()))
+	srv := httptest.NewServer(httpHandler(mcpserver.New(noTemporal{}, mcpserver.Options{}), nil, discardLogger()))
 	t.Cleanup(srv.Close)
 
 	t.Run("streamable HTTP client", func(t *testing.T) {
@@ -264,7 +422,7 @@ func TestServeHTTPStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- serveHTTP(ctx, mcpserver.New(noTemporal{}, mcpserver.Options{}), "127.0.0.1:0", discardLogger())
+		done <- serveHTTP(ctx, mcpserver.New(noTemporal{}, mcpserver.Options{}), "127.0.0.1:0", nil, discardLogger())
 	}()
 	cancel()
 	select {
@@ -274,5 +432,88 @@ func TestServeHTTPStops(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("serveHTTP did not stop")
+	}
+}
+
+// bearer is an http.RoundTripper that sends a bearer token.
+type bearer struct{ token string }
+
+func (b bearer) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set("Authorization", "Bearer "+b.token)
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+// TestHTTPHandlerAuth serves the MCP handler with tokens, plus a whoami
+// tool that reports the caller from its context, so the test sees what
+// a tool handler sees.
+func TestHTTPHandlerAuth(t *testing.T) {
+	t.Parallel()
+
+	tokens, err := auth.ParseTokenList(auth.Entry("alice", aliceToken))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := mcpserver.New(noTemporal{}, mcpserver.Options{})
+	type whoamiOut struct {
+		Caller string `json:"caller"`
+	}
+	mcp.AddTool(server, &mcp.Tool{Name: "whoami"}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, whoamiOut, error) {
+		c, _ := auth.CallerFrom(ctx)
+		return nil, whoamiOut{Caller: c.Name}, nil
+	})
+	var logs syncBuffer
+	srv := httptest.NewServer(httpHandler(server, tokens, slog.New(slog.NewTextHandler(&logs, nil))))
+	t.Cleanup(srv.Close)
+
+	initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"x","version":"1"}}}`
+	for _, tt := range []struct {
+		name, header string
+		want         int
+	}{
+		{name: "no token", want: http.StatusUnauthorized},
+		{name: "bad token", header: "Bearer " + bobToken, want: http.StatusUnauthorized},
+		{name: "good token", header: "Bearer " + aliceToken, want: http.StatusOK},
+	} {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+mcpPath, strings.NewReader(initialize))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		if tt.header != "" {
+			req.Header.Set("Authorization", tt.header)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != tt.want {
+			t.Errorf("%s: status = %d, want %d", tt.name, resp.StatusCode, tt.want)
+		}
+		if tt.want == http.StatusUnauthorized && !strings.HasPrefix(resp.Header.Get("WWW-Authenticate"), "Bearer ") {
+			t.Errorf("%s: WWW-Authenticate = %q, want a Bearer challenge", tt.name, resp.Header.Get("WWW-Authenticate"))
+		}
+	}
+
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test-host"}, nil).Connect(t.Context(), &mcp.StreamableClientTransport{
+		Endpoint:   srv.URL + mcpPath,
+		HTTPClient: &http.Client{Transport: bearer{aliceToken}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer cs.Close()
+	res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "whoami"})
+	if err != nil || res.IsError {
+		t.Fatalf("CallTool(whoami) = %+v, %v", res, err)
+	}
+	if got, _ := res.StructuredContent.(map[string]any)["caller"].(string); got != "alice" {
+		t.Errorf("the tool handler saw caller %q, want alice", got)
+	}
+
+	if strings.Contains(logs.String(), aliceToken) || strings.Contains(logs.String(), bobToken) {
+		t.Errorf("logs contain a token:\n%s", logs.String())
 	}
 }
