@@ -231,3 +231,17 @@ func TestStartReportKeyJobOfAnotherOwner(t *testing.T) {
 		}
 	}
 }
+
+func TestStartReportDescription(t *testing.T) {
+	t.Parallel()
+
+	d := startReportTool.Description
+	if strings.Contains(d, "shared by everyone") {
+		t.Errorf("description says keys are shared:\n%s", d)
+	}
+	for _, want := range []string{"private to the caller", "another caller using the same key gets\nits own job"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("description does not contain %q:\n%s", want, d)
+		}
+	}
+}

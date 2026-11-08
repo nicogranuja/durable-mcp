@@ -38,8 +38,8 @@ The window defaults to the 30 days before the job starts and can be at most 366 
 
 Always pass an idempotency_key, a fresh UUID you generate for each new report, and reuse it if you retry this call:
 a retry with the same key and arguments returns the same job instead of starting a second one, even after the job finished,
-and with the window it was started with. Keys are shared by everyone using this server, so do not use short or guessable keys.
-Reusing a key with different arguments is an error.`,
+and with the window it was started with. Keys and jobs are private to the caller: another caller using the same key gets
+its own job, and cannot see or cancel yours. Reusing a key with different arguments is an error.`,
 	OutputSchema: outputSchema[StartReportOutput](map[string][]any{"status": jobStates}),
 	Annotations: &mcp.ToolAnnotations{
 		DestructiveHint: new(false),
