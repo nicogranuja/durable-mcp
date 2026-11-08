@@ -105,11 +105,47 @@ bin/durable-mcp serve -transport http       # serves http://127.0.0.1:8080/mcp
 (the same for both, with the same environment variables), the transport, and, for the worker, the GitHub API URL for
 GitHub Enterprise Server.
 
+Without auth tokens, anyone who can reach the HTTP transport can start and cancel jobs, so it listens on `127.0.0.1` by
+default and refuses any address that is not a loopback IP. It also rejects requests with a non-loopback `Host` header
+(DNS rebinding) and cross-origin browser requests, so web pages cannot reach it either. To accept callers from other
+machines, configure tokens.
+
+### Authentication
+
+The HTTP transport can require a bearer token on every request. Each caller has a name and its own token, and the server
+keeps only the SHA-256 of each token, so a leaked configuration lets no one in. Mint a token for each caller:
+
+```sh
+bin/durable-mcp token alice
+# token: dmcp_...           give this to alice; it is not stored anywhere
+# entry: alice:3f2a...      the line for the server's tokens file
+```
+
+Put the `entry:` values in a file, one per line (`#` starts a comment), and start the server with it. With tokens, the
+server may listen beyond loopback:
+
+```sh
+bin/durable-mcp serve -transport http -http-addr 0.0.0.0:8080 -auth-tokens-file /etc/durable-mcp/tokens
+```
+
+The file can also come from `DURABLE_MCP_AUTH_TOKENS_FILE`, or the entries from `DURABLE_MCP_AUTH_TOKENS`,
+comma-separated; setting both is an error. The stdio transport ignores tokens: its only caller is the MCP host that
+started it. Callers send the token in the `Authorization` header:
+
+```sh
+curl -sS http://mcp.example.internal:8080/mcp \
+  -H "Authorization: Bearer $DURABLE_MCP_TOKEN" \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+A request without a valid token gets `401 Unauthorized` with a `WWW-Authenticate: Bearer` challenge. Rejections are
+logged at most once every 10 seconds, with a count of the ones left out, and never with the token. To rotate a token,
+mint a new one for the same name, replace that caller's entry, and restart the server.
+
 > [!WARNING]
-> The HTTP transport has **no authentication yet** (bearer-token auth is the next milestone). Anyone who can reach it can
-> start and cancel jobs, so it listens on `127.0.0.1` by default and refuses any address that is not a loopback IP. It also
-> rejects requests with a non-loopback `Host` header (DNS rebinding) and cross-origin browser requests, so web pages
-> cannot reach it either.
+> The transport is plain HTTP, so tokens travel unencrypted, and the server logs a warning when it listens beyond
+> loopback. Beyond a single machine, put it behind a TLS-terminating proxy or keep it on a private network.
 
 ## Use it from Claude Code
 
@@ -126,6 +162,8 @@ Or, with `bin/durable-mcp serve -transport http` running, over streamable HTTP:
 
 ```sh
 claude mcp add --transport http durable-mcp http://127.0.0.1:8080/mcp
+# with auth tokens:
+claude mcp add --transport http durable-mcp https://mcp.example.internal/mcp --header "Authorization: Bearer $DURABLE_MCP_TOKEN"
 ```
 
 Add `--scope user` to make it available in every project. Then ask for a report. A conversation looks like this (the
