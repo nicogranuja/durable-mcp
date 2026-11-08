@@ -330,12 +330,25 @@ func newHTTPServer(h http.Handler, logger *slog.Logger) *http.Server {
 // parseServeFlags allows only on loopback, it serves every request.
 //
 // Two checks protect a server on loopback from web pages in the user's
-// browser: the SDK rejects requests whose Host header is not a loopback
-// name (DNS rebinding), and CrossOriginProtection rejects cross-origin
-// browser requests.
+// browser: CrossOriginProtection rejects cross-origin browser requests,
+// and, without tokens, the SDK rejects requests to a loopback address
+// whose Host header is not a loopback name (DNS rebinding: a page on a
+// name the attacker controls, resolved to 127.0.0.1, would otherwise be
+// same-origin to the browser).
+//
+// With tokens, the Host check is off. It is not needed: a rebinding page
+// cannot present a bearer token it does not have, so its requests get 401
+// whatever the Host. And it gets in the way: a TLS proxy on the same host
+// that forwards to 127.0.0.1 and keeps the public Host header, as most do
+// by default, would get 403 for every request.
 func httpHandler(server *mcp.Server, tokens *auth.Tokens, logger *slog.Logger) http.Handler {
 	var h http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
-		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, Logger: logger})
+		&mcp.StreamableHTTPOptions{
+			Stateless:                  true,
+			JSONResponse:               true,
+			Logger:                     logger,
+			DisableLocalhostProtection: tokens != nil,
+		})
 	if tokens != nil {
 		h = auth.Middleware(tokens, logger, h)
 	}

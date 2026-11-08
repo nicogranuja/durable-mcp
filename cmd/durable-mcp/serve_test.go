@@ -468,16 +468,25 @@ func TestHTTPHandlerAuth(t *testing.T) {
 
 	initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"x","version":"1"}}}`
 	for _, tt := range []struct {
-		name, header string
-		want         int
+		name, header, host string
+		want               int
 	}{
 		{name: "no token", want: http.StatusUnauthorized},
 		{name: "bad token", header: "Bearer " + bobToken, want: http.StatusUnauthorized},
 		{name: "good token", header: "Bearer " + aliceToken, want: http.StatusOK},
+		// A TLS proxy on the same host forwards to 127.0.0.1 with the
+		// public Host header. With tokens, the SDK's DNS-rebinding check,
+		// which would answer 403, is off.
+		{name: "good token through a same-host proxy", header: "Bearer " + aliceToken, host: "mcp.example.com", want: http.StatusOK},
+		// A DNS-rebinding page has no token, so it still gets nowhere.
+		{name: "no token with a non-loopback Host", host: "evil.example", want: http.StatusUnauthorized},
 	} {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+mcpPath, strings.NewReader(initialize))
 		if err != nil {
 			t.Fatal(err)
+		}
+		if tt.host != "" {
+			req.Host = tt.host
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json, text/event-stream")
