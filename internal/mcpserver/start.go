@@ -191,10 +191,33 @@ func (t *tools) startError(ctx context.Context, jobID string, haveKey bool, err 
 }
 
 // existingJob answers a start whose idempotency key names a job that
-// already exists, after checking that the job is for the same request.
+// already exists, after checking that the job is the caller's and is for
+// the same request.
 func (t *tools) existingJob(ctx context.Context, jobID, fp string) (*mcp.CallToolResult, StartReportOutput, error) {
-	resp, err := t.describeJob(ctx, "start_report", jobID)
+	resp, err := t.lookupJob(ctx, "start_report", jobID)
+	if _, ok := errors.AsType[*serviceerror.NotFound](err); ok {
+		// The start found the job, and now it is gone: it had finished,
+		// and the namespace's retention period deleted it in between. The
+		// ID is free again, so the same call starts a new job.
+		t.logger.Info("Job for an idempotency key was deleted after the start found it", "JobID", jobID)
+		return nil, StartReportOutput{}, errors.New("start_report: the job for this idempotency_key had finished " +
+			"and was deleted just now, when the Temporal namespace's retention period passed. " +
+			"Retry this call with the same arguments and idempotency_key: that starts a new job")
+	}
+	if errors.Is(err, errNotOwned) {
+		// The ID is a hash of this caller's name and key, so only this
+		// caller's start can have made it; a job there with another owner
+		// means the memo or the formula changed. Never show it, and never
+		// call it this caller's.
+		t.logger.Error("Job for a caller's idempotency key has another owner", "JobID", jobID, "Caller", callerName(ctx))
+		return nil, StartReportOutput{}, errors.New("start_report: an internal error stopped this idempotency_key " +
+			"from being used, and no job was started. Use a new idempotency_key; if this happens again, " +
+			"tell the user that the durable-mcp server's operator should check its logs")
+	}
 	if err != nil {
+		if errors.Is(err, errNotReport) {
+			err = notFoundError(jobID)
+		}
 		return nil, StartReportOutput{}, err
 	}
 	// A job without a readable fingerprint was not started by start_report,

@@ -2,9 +2,12 @@ package mcpserver
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
 
 	"github.com/nicogranuja/durable-mcp/internal/auth"
 	"github.com/nicogranuja/durable-mcp/internal/report"
@@ -162,5 +165,69 @@ func TestJobsWithoutCallerField(t *testing.T) {
 	if _, _, err := tl.jobStatus(as(t.Context(), "alice"), nil, JobInput{JobID: testJobID}); err == nil ||
 		err.Error() != notFoundError(testJobID).Error() {
 		t.Errorf("job_status as alice = %v, want not found", err)
+	}
+}
+
+// TestStartReportJobDeletedMeanwhile covers a start that Temporal refuses
+// because the key's job exists, after which the job is gone: it had
+// finished and was deleted when its retention period passed. Retrying
+// then starts a new job, and the error says so.
+func TestStartReportJobDeletedMeanwhile(t *testing.T) {
+	t.Parallel()
+
+	f := newFakeClient()
+	f.startErr = serviceerror.NewWorkflowExecutionAlreadyStarted("Workflow execution already finished", "", "run-0")
+	tl := newTools(f)
+	in := StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: "deleted-key-1"}
+	_, out, err := tl.startReport(as(t.Context(), "alice"), nil, in)
+	if err == nil {
+		t.Fatalf("startReport() = %+v, want an error", out)
+	}
+	for _, want := range []string{"was deleted", "Retry this call with the same arguments and idempotency_key", "starts a new job"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "Retrying will not help") {
+		t.Errorf("error = %q, want no advice against retrying", err)
+	}
+
+	f.startErr = nil
+	_, out, err = tl.startReport(as(t.Context(), "alice"), nil, in)
+	if err != nil || !out.Created || out.JobID != jobIDForKey("alice", in.IdempotencyKey) {
+		t.Errorf("retried startReport() = %+v, %v; want a new job with the key's ID", out, err)
+	}
+}
+
+// TestStartReportKeyJobOfAnotherOwner covers a job at a caller's key ID
+// with another owner in its memo, which only a changed memo or ID formula
+// could cause. It is an internal error, not the deleted-job case, and the
+// job is never returned.
+func TestStartReportKeyJobOfAnotherOwner(t *testing.T) {
+	t.Parallel()
+
+	f := newFakeClient()
+	tl := newTools(f)
+	in := StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: "owned-key-1"}
+	req, err := in.validate(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := f.add(jobIDForKey("alice", in.IdempotencyKey), enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING)
+	j.memo = map[string]any{memoFingerprint: fingerprint(req), memoCaller: "mallory"}
+
+	_, out, err := tl.startReport(as(t.Context(), "alice"), nil, in)
+	if err == nil {
+		t.Fatalf("startReport() = %+v, want an error", out)
+	}
+	for _, want := range []string{"internal error", "no job was started", "Use a new idempotency_key"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to contain %q", err, want)
+		}
+	}
+	for _, leak := range []string{"mallory", "deleted", "already exists"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("error = %q, want it not to contain %q", err, leak)
+		}
 	}
 }
