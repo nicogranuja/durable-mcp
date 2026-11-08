@@ -109,6 +109,11 @@ func New(c Client, opts Options) *mcp.Server {
 // it with [auth.CallerFrom]. The HTTP transport's auth middleware passes
 // the caller's name to the SDK as the token info's user ID; over stdio,
 // and over HTTP without auth, there is no token info and no caller.
+//
+// The stateless HTTP handler happens to run handlers in the HTTP request's
+// context, which auth.Middleware already gave the caller, but the SDK does
+// not promise that (a stateful session's requests do not), while the token
+// info is its documented way to pass the caller on.
 func withCaller(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		if extra := req.GetExtra(); extra != nil && extra.TokenInfo != nil && extra.TokenInfo.UserID != "" {
