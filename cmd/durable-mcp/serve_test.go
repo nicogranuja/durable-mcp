@@ -517,3 +517,36 @@ func TestHTTPHandlerAuth(t *testing.T) {
 		t.Errorf("logs contain a token:\n%s", logs.String())
 	}
 }
+
+func TestHTTPServerLimitsHeaders(t *testing.T) {
+	t.Parallel()
+
+	ok := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	srv := httptest.NewUnstartedServer(ok)
+	srv.Config = newHTTPServer(ok, discardLogger())
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	for _, tt := range []struct {
+		name string
+		size int
+		want int
+	}{
+		{name: "small headers", size: 100, want: http.StatusOK},
+		{name: "headers over the limit", size: 2 * maxHeaderBytes, want: http.StatusRequestHeaderFieldsTooLarge},
+	} {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Padding", strings.Repeat("x", tt.size))
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != tt.want {
+			t.Errorf("%s: status = %d, want %d", tt.name, resp.StatusCode, tt.want)
+		}
+	}
+}

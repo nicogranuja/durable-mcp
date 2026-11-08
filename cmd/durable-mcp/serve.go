@@ -39,6 +39,11 @@ const (
 	// in flight finish. Tool calls return within seconds.
 	httpShutdownTimeout = 10 * time.Second
 
+	// maxHeaderBytes bounds a request's headers, well below net/http's
+	// 1 MiB default: an MCP request needs a few short headers, and the
+	// server reads them before it checks the token.
+	maxHeaderBytes = 16 << 10
+
 	// healthCheckTimeout bounds the Temporal check at startup.
 	healthCheckTimeout = 5 * time.Second
 
@@ -274,16 +279,7 @@ func serveHTTP(ctx context.Context, server *mcp.Server, addr string, tokens *aut
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{
-		Handler: httpHandler(server, tokens, logger),
-		// No tool streams or takes long, and stateless mode has no
-		// long-lived GET stream, so every request can be bounded.
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      time.Minute,
-		IdleTimeout:       2 * time.Minute,
-		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
-	}
+	srv := newHTTPServer(httpHandler(server, tokens, logger), logger)
 	logger.Info("Serving MCP over streamable HTTP", "URL", "http://"+ln.Addr().String()+mcpPath)
 
 	errc := make(chan error, 1)
@@ -303,6 +299,21 @@ func serveHTTP(ctx context.Context, server *mcp.Server, addr string, tokens *aut
 		return err
 	}
 	return nil
+}
+
+// newHTTPServer returns the HTTP server for h.
+func newHTTPServer(h http.Handler, logger *slog.Logger) *http.Server {
+	return &http.Server{
+		Handler: h,
+		// No tool streams or takes long, and stateless mode has no
+		// long-lived GET stream, so every request can be bounded.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      time.Minute,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    maxHeaderBytes,
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+	}
 }
 
 // httpHandler returns the HTTP handler for the streamable HTTP transport.
