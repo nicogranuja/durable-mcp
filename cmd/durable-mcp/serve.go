@@ -47,9 +47,10 @@ const (
 	// healthCheckTimeout bounds the Temporal check at startup.
 	healthCheckTimeout = 5 * time.Second
 
-	// Where serve reads auth tokens from.
-	envAuthTokensFile = "DURABLE_MCP_AUTH_TOKENS_FILE"
-	envAuthTokens     = "DURABLE_MCP_AUTH_TOKENS"
+	// Where serve reads auth tokens from: the names of environment
+	// variables, which hold hashes, not credentials.
+	envAuthTokensFile = "DURABLE_MCP_AUTH_TOKENS_FILE" //nolint:gosec // G101: a variable name
+	envAuthTokens     = "DURABLE_MCP_AUTH_TOKENS"      //nolint:gosec // G101: a variable name
 )
 
 // serveConfig is the MCP server's configuration, from flags and the
@@ -157,7 +158,8 @@ func loadTokens(file, list string) (*auth.Tokens, error) {
 	case file != "":
 		source = "-auth-tokens-file " + file
 		var f *os.File
-		if f, err = os.Open(file); err != nil {
+		// The operator names the file; reading it is the point.
+		if f, err = os.Open(file); err != nil { //nolint:gosec // G304: the path comes from the operator
 			return nil, fmt.Errorf("read the auth tokens: %w", err)
 		}
 		defer f.Close()
