@@ -2,7 +2,8 @@
 // durable Temporal workflows.
 //
 // "durable-mcp serve" runs the MCP server, over stdio or streamable HTTP,
-// and "durable-mcp worker" runs the Temporal worker that does the work.
+// "durable-mcp worker" runs the Temporal worker that does the work, and
+// "durable-mcp token" mints bearer tokens for the HTTP transport.
 package main
 
 import (
@@ -37,6 +38,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdin i
 			return runServe(ctx, args[1:], getenv, stdin, stdout, stderr)
 		case "worker":
 			return runWorker(ctx, args[1:], getenv, stderr)
+		case "token":
+			return runToken(args[1:], stdout, stderr)
 		}
 	}
 
@@ -49,6 +52,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdin i
 Usage:
   durable-mcp serve [flags]    run the MCP server, over stdio or streamable HTTP
   durable-mcp worker [flags]   run the Temporal worker for repository reports
+  durable-mcp token NAME       mint a bearer token for the HTTP transport
   durable-mcp -version
 
 Run "durable-mcp serve -h" or "durable-mcp worker -h" for their flags.
