@@ -143,6 +143,13 @@ A request without a valid token gets `401 Unauthorized` with a `WWW-Authenticate
 logged at most once every 10 seconds, with a count of the ones left out, and never with the token. To rotate a token,
 mint a new one for the same name, replace that caller's entry, and restart the server.
 
+Jobs are private to the caller that started them. The caller's name is part of the job ID for an idempotency key, so two
+callers with the same key get two jobs, and it is stored in the job's memo: `job_status`, `job_result`, and `cancel_job`
+answer another caller's job exactly as they answer a job ID that does not exist. Jobs started over stdio, or over HTTP
+without tokens, belong to no caller and are visible only there. Ownership follows the name, so rotating a token keeps
+the caller's jobs. With tokens, the `Host` check is off, since a DNS-rebinding page has no token, so a TLS proxy on the
+same machine may forward to `127.0.0.1` with the public `Host` header.
+
 > [!WARNING]
 > The transport is plain HTTP, so tokens travel unencrypted, and the server logs a warning when it listens beyond
 > loopback. Beyond a single machine, put it behind a TLS-terminating proxy or keep it on a private network.
