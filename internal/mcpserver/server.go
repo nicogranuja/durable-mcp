@@ -15,6 +15,7 @@ import (
 	"go.temporal.io/sdk/converter"
 	"google.golang.org/grpc/codes"
 
+	"github.com/nicogranuja/durable-mcp/internal/auth"
 	"github.com/nicogranuja/durable-mcp/internal/report"
 )
 
@@ -97,9 +98,24 @@ func New(c Client, opts Options) *mcp.Server {
 		// 2026-07-28 deprecates: the server's logs go to its operator.
 		Capabilities: &mcp.ServerCapabilities{},
 	})
+	s.AddReceivingMiddleware(withCaller)
 	t := &tools{client: c, taskQueue: opts.TaskQueue, logger: logger}
 	t.register(s)
 	return s
+}
+
+// withCaller puts the authenticated caller, if there is one, in the
+// context of each request the server receives, so that handlers can read
+// it with [auth.CallerFrom]. The HTTP transport's auth middleware passes
+// the caller's name to the SDK as the token info's user ID; over stdio,
+// and over HTTP without auth, there is no token info and no caller.
+func withCaller(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		if extra := req.GetExtra(); extra != nil && extra.TokenInfo != nil && extra.TokenInfo.UserID != "" {
+			ctx = auth.WithCaller(ctx, auth.Caller{Name: extra.TokenInfo.UserID})
+		}
+		return next(ctx, method, req)
+	}
 }
 
 // tools implements the MCP tools.
