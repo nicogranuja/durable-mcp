@@ -16,7 +16,7 @@ import (
 )
 
 // testJobID is a job ID of the right shape.
-var testJobID = jobIDForKey("test")
+var testJobID = jobIDForKey("", "test")
 
 // pendingPage is a pending page activity on its attempt-th attempt after
 // failing with an application error of errType, or on its first attempt if
@@ -202,7 +202,7 @@ func TestJobStatusClosed(t *testing.T) {
 func TestJobToolsRejectBadJobs(t *testing.T) {
 	t.Parallel()
 
-	otherWorkflow := jobIDForKey("other")
+	otherWorkflow := jobIDForKey("", "other")
 	tests := []struct {
 		name  string
 		jobID string

@@ -204,7 +204,7 @@ func TestJobLifecycle(t *testing.T) {
 	started := structured[StartReportOutput](t, call(t, cs, "start_report", map[string]any{
 		"owner": "acme", "repo": "widgets", "since": "2026-10-01", "idempotency_key": "lifecycle-1",
 	}))
-	if !started.Created || started.Status != statusRunning || started.JobID != jobIDForKey("lifecycle-1") {
+	if !started.Created || started.Status != statusRunning || started.JobID != jobIDForKey("", "lifecycle-1") {
 		t.Fatalf("start_report = %+v, want a new running job", started)
 	}
 	again := structured[StartReportOutput](t, call(t, cs, "start_report", map[string]any{

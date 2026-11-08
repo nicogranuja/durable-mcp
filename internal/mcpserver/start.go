@@ -16,9 +16,14 @@ import (
 	"github.com/nicogranuja/durable-mcp/internal/report"
 )
 
-// memoFingerprint is the memo field that records which request a job was
-// started for.
-const memoFingerprint = "request_fingerprint"
+// Memo fields that start_report records on every job it starts.
+const (
+	// memoFingerprint records which request the job was started for.
+	memoFingerprint = "request_fingerprint"
+	// memoCaller records the caller that started the job, its owner: the
+	// only caller the tools show it to. See jobOwner.
+	memoCaller = "caller"
+)
 
 var startReportTool = &mcp.Tool{
 	Name:  "start_report",
@@ -120,7 +125,9 @@ func inputError(err error) error {
 //     replaces a running job. With WorkflowExecutionErrorWhenAlreadyStarted
 //     the duplicate comes back as an error, so the tool can tell a new job
 //     from an existing one and check that it is for the same request.
-func (t *tools) startOptions(jobID, fp string, req report.Request) client.StartWorkflowOptions {
+//   - The memo records the request's fingerprint and the caller that owns
+//     the job.
+func (t *tools) startOptions(jobID, fp, caller string, req report.Request) client.StartWorkflowOptions {
 	return client.StartWorkflowOptions{
 		ID:                                       jobID,
 		TaskQueue:                                t.taskQueue,
@@ -128,7 +135,7 @@ func (t *tools) startOptions(jobID, fp string, req report.Request) client.StartW
 		WorkflowIDReusePolicy:                    enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 		WorkflowIDConflictPolicy:                 enumspb.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
 		WorkflowExecutionErrorWhenAlreadyStarted: true,
-		Memo:                                     map[string]any{memoFingerprint: fp},
+		Memo:                                     map[string]any{memoFingerprint: fp, memoCaller: caller},
 		StaticSummary:                            "Report on " + req.Owner + "/" + req.Repo,
 	}
 }
@@ -138,22 +145,23 @@ func (t *tools) startReport(ctx context.Context, _ *mcp.CallToolRequest, in Star
 	if err != nil {
 		return nil, StartReportOutput{}, inputError(err)
 	}
+	caller := callerName(ctx)
 	jobID := newJobID()
 	if in.IdempotencyKey != "" {
-		jobID = jobIDForKey(in.IdempotencyKey)
+		jobID = jobIDForKey(caller, in.IdempotencyKey)
 	}
 	fp := fingerprint(req)
 
 	startCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
-	_, err = t.client.ExecuteWorkflow(startCtx, t.startOptions(jobID, fp, req), report.RepositoryReport, req)
+	_, err = t.client.ExecuteWorkflow(startCtx, t.startOptions(jobID, fp, caller, req), report.RepositoryReport, req)
 	if _, ok := errors.AsType[*serviceerror.WorkflowExecutionAlreadyStarted](err); ok && in.IdempotencyKey != "" {
 		return t.existingJob(ctx, jobID, fp)
 	}
 	if err != nil {
 		return nil, StartReportOutput{}, t.startError(startCtx, jobID, in.IdempotencyKey != "", err)
 	}
-	t.logger.Info("Started report job", "JobID", jobID, "Owner", req.Owner, "Repo", req.Repo)
+	t.logger.Info("Started report job", "JobID", jobID, "Caller", caller, "Owner", req.Owner, "Repo", req.Repo)
 	return nil, StartReportOutput{
 		JobID:   jobID,
 		Status:  statusRunning,

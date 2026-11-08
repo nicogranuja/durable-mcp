@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
@@ -137,25 +138,89 @@ func (t *tools) register(s *mcp.Server) {
 	mcp.AddTool(s, cancelJobTool, t.cancelJob)
 }
 
-// describeJob describes the latest run of the job, and checks that the job
-// is a report. The check keeps the tools to report jobs: other workflows in
-// the namespace are reported as not found, so cancel_job cannot cancel them.
+// describeJob describes the latest run of a job that the caller in ctx
+// owns. A job that does not exist, is not a report, or belongs to another
+// caller is reported as not found, with the same answer whichever it is,
+// so that a caller cannot learn whether another caller's job exists. The
+// type check keeps the tools to report jobs, so cancel_job cannot cancel
+// other workflows in the namespace.
 func (t *tools) describeJob(ctx context.Context, op, jobID string) (*workflowservice.DescribeWorkflowExecutionResponse, error) {
+	resp, err := t.lookupJob(ctx, op, jobID)
+	switch {
+	case err == nil:
+		return resp, nil
+	case errors.Is(err, errNotOwned), errors.Is(err, errNotReport):
+		return nil, notFoundError(jobID)
+	}
+	if _, ok := errors.AsType[*serviceerror.NotFound](err); ok {
+		return nil, notFoundError(jobID)
+	}
+	return nil, err
+}
+
+// Reasons lookupJob gives for not returning a job that Temporal has.
+var (
+	errNotReport = errors.New("the workflow is not a report")
+	errNotOwned  = errors.New("the job belongs to another caller")
+)
+
+// lookupJob is describeJob with the reason a job is not returned: a
+// *serviceerror.NotFound from Temporal, errNotReport, or errNotOwned. Any
+// other Temporal error is already a tool error.
+func (t *tools) lookupJob(ctx context.Context, op, jobID string) (*workflowservice.DescribeWorkflowExecutionResponse, error) {
 	if err := validateJobID(jobID); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	rpcCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
-	resp, err := t.client.DescribeWorkflowExecution(ctx, jobID, "")
+	resp, err := t.client.DescribeWorkflowExecution(rpcCtx, jobID, "")
 	if err != nil {
-		return nil, t.temporalError(ctx, op, jobID, err)
+		if nf, ok := errors.AsType[*serviceerror.NotFound](err); ok {
+			return nil, nf
+		}
+		return nil, t.temporalError(rpcCtx, op, jobID, err)
 	}
-	if resp.GetWorkflowExecutionInfo().GetType().GetName() != reportWorkflowType {
+	info := resp.GetWorkflowExecutionInfo()
+	if info.GetType().GetName() != reportWorkflowType {
 		t.logger.Warn("Job ID names a workflow that is not a report",
-			"Op", op, "JobID", jobID, "WorkflowType", resp.GetWorkflowExecutionInfo().GetType().GetName())
-		return nil, notFoundError(jobID)
+			"Op", op, "JobID", jobID, "WorkflowType", info.GetType().GetName())
+		return nil, errNotReport
+	}
+	if owner, ok := jobOwner(info.GetMemo()); !ok || owner != callerName(ctx) {
+		// Logged for the operator, who may see both names; the caller
+		// only ever gets not found.
+		t.logger.Info("Job belongs to another caller", "Op", op, "JobID", jobID,
+			"Caller", callerName(ctx), "Owner", owner, "OwnerReadable", ok)
+		return nil, errNotOwned
 	}
 	return resp, nil
+}
+
+// callerName returns the name of the authenticated caller in ctx, or ""
+// if there is none: over stdio, and over HTTP without tokens.
+func callerName(ctx context.Context) string {
+	c, _ := auth.CallerFrom(ctx)
+	return c.Name
+}
+
+// jobOwner returns the caller that started a job, from its memo. A job
+// with no caller field was started without a caller, as every job was
+// before callers existed, and belongs to the empty caller. A field that
+// does not decode as a string belongs to no one, so ok is false.
+//
+// Only start_report writes the field, when it starts the job; the report
+// workflow never upserts its memo. Anyone who could change a memo can
+// already write to the Temporal namespace, and so cancel or read any job
+// there directly: the memo is trusted as much as the namespace is.
+func jobOwner(memo *commonpb.Memo) (owner string, ok bool) {
+	payload := memo.GetFields()[memoCaller]
+	if payload == nil {
+		return "", true
+	}
+	if converter.GetDefaultDataConverter().FromPayload(payload, &owner) != nil {
+		return "", false
+	}
+	return owner, true
 }
 
 // notFoundError is the tool error for a job that does not exist.

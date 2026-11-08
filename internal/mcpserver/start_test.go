@@ -179,7 +179,7 @@ func TestStartReportIdempotencyKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first startReport() error = %v", err)
 	}
-	if !first.Created || first.JobID != jobIDForKey("c0ffee-1") {
+	if !first.Created || first.JobID != jobIDForKey("", "c0ffee-1") {
 		t.Fatalf("first startReport() = %+v, want a new job with the key's ID", first)
 	}
 
@@ -291,7 +291,7 @@ func TestStartReportKeyOfForeignJob(t *testing.T) {
 	// A report workflow with the key's ID that start_report did not start,
 	// so it has no fingerprint, is not returned as the caller's job.
 	f := newFakeClient()
-	f.add(jobIDForKey("foreign-key-1"), enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING)
+	f.add(jobIDForKey("", "foreign-key-1"), enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING)
 	_, out, err := newTools(f).startReport(t.Context(), nil, StartReportInput{Owner: "acme", Repo: "widgets", IdempotencyKey: "foreign-key-1"})
 	if err == nil || !strings.Contains(err.Error(), "already used to start a report with different arguments") {
 		t.Errorf("startReport() = %+v, %v; want an error about the key", out, err)
@@ -335,17 +335,17 @@ func TestJobIDs(t *testing.T) {
 	if a, b := newJobID(), newJobID(); a == b {
 		t.Errorf("newJobID() returned %q twice", a)
 	}
-	for _, id := range []string{newJobID(), jobIDForKey("x"), jobIDForKey(strings.Repeat("ü", 200))} {
+	for _, id := range []string{newJobID(), jobIDForKey("", "x"), jobIDForKey("", strings.Repeat("ü", 200))} {
 		if err := validateJobID(id); err != nil {
 			t.Errorf("validateJobID(%q) = %v", id, err)
 		}
 	}
 	// The mapping must never change: a retry after an upgrade has to find
 	// the job its key started before.
-	if got, want := jobIDForKey("c0ffee-1"), "report-tu5qnk5a3ht6wirycj6t44ywpu"; got != want {
-		t.Errorf("jobIDForKey(\"c0ffee-1\") = %q, want %q", got, want)
+	if got, want := jobIDForKey("", "c0ffee-1"), "report-tu5qnk5a3ht6wirycj6t44ywpu"; got != want {
+		t.Errorf("jobIDForKey(\"\", \"c0ffee-1\") = %q, want %q", got, want)
 	}
-	if jobIDForKey("a") == jobIDForKey("b") {
+	if jobIDForKey("", "a") == jobIDForKey("", "b") {
 		t.Error("jobIDForKey maps two keys to one ID")
 	}
 	for _, id := range []string{

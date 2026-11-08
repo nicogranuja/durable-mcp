@@ -34,12 +34,26 @@ func newJobID() string {
 	return jobIDPrefix + strings.ToLower(rand.Text()) // 26 characters, 130 bits
 }
 
-// jobIDForKey returns the job ID that an idempotency key maps to: the
-// first 128 bits of a SHA-256 hash of the key. Hashing keeps the ID a fixed
-// length and charset whatever the key is, and keeps the key's text out of
-// the workflow ID, which shows in the Temporal UI and logs.
-func jobIDForKey(key string) string {
-	sum := sha256.Sum256([]byte("durable-mcp report job\x00" + key))
+// jobIDForKey returns the job ID that a caller's idempotency key maps to:
+// the first 128 bits of a SHA-256 hash of the caller's name and the key.
+// Hashing keeps the ID a fixed length and charset whatever the key is, and
+// keeps the key's text out of the workflow ID, which shows in the Temporal
+// UI and logs.
+//
+// The caller is part of the hash, so each caller has its own keys: two
+// callers that pick the same key get two jobs, and no caller can name
+// another's job by guessing its key. The empty caller, over stdio or
+// unauthenticated loopback HTTP, keeps the formula from before callers
+// existed, so that a retry after an upgrade finds the job its key started.
+// Neither a caller's name nor a key can contain a NUL, so the separator
+// keeps every (caller, key) pair distinct, and the "/v2" domain keeps
+// caller-scoped IDs apart from the empty caller's.
+func jobIDForKey(caller, key string) string {
+	input := "durable-mcp report job\x00" + key
+	if caller != "" {
+		input = "durable-mcp report job/v2\x00" + caller + "\x00" + key
+	}
+	sum := sha256.Sum256([]byte(input))
 	return jobIDPrefix + idEncoding.EncodeToString(sum[:16])
 }
 
