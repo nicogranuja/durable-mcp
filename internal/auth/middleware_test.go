@@ -67,7 +67,12 @@ func TestMiddleware(t *testing.T) {
 			t.Errorf("logs contain a presented credential:\n%s", logs.String())
 		}
 	}
-	if !strings.Contains(logs.String(), "Reason=\"invalid bearer token\"") {
+	// Rejections are sampled: the first is logged, and the rest of this
+	// burst are not.
+	if got := strings.Count(logs.String(), "Rejected an HTTP request"); got != 1 {
+		t.Errorf("logs have %d rejections, want 1:\n%s", got, logs.String())
+	}
+	if !strings.Contains(logs.String(), "Reason=\"missing bearer token\"") {
 		t.Errorf("logs = %s, want the rejection reason", logs.String())
 	}
 }
