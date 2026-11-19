@@ -593,3 +593,105 @@ func TestHTTPServerLimitsHeaders(t *testing.T) {
 		}
 	}
 }
+
+// TestHTTPServerTimeouts pins the HTTP server's timeouts to the values the
+// README's timeout table documents, and checks how they relate to the tool
+// call deadline.
+func TestHTTPServerTimeouts(t *testing.T) {
+	t.Parallel()
+
+	srv := newHTTPServer(http.NotFoundHandler(), discardLogger())
+	for _, tt := range []struct {
+		name      string
+		got, want time.Duration
+	}{
+		{"ReadHeaderTimeout", srv.ReadHeaderTimeout, 10 * time.Second},
+		{"ReadTimeout", srv.ReadTimeout, 30 * time.Second},
+		{"WriteTimeout", srv.WriteTimeout, time.Minute},
+		{"IdleTimeout", srv.IdleTimeout, 2 * time.Minute},
+		{"httpShutdownTimeout", httpShutdownTimeout, 10 * time.Second},
+	} {
+		if tt.got != tt.want {
+			t.Errorf("%s = %s, want %s", tt.name, tt.got, tt.want)
+		}
+	}
+	if srv.MaxHeaderBytes != maxHeaderBytes {
+		t.Errorf("MaxHeaderBytes = %d, want %d", srv.MaxHeaderBytes, maxHeaderBytes)
+	}
+	// A tool call that runs to its deadline must still be able to answer.
+	if mcpserver.DefaultToolTimeout > maxToolTimeout || maxToolTimeout >= srv.WriteTimeout {
+		t.Errorf("tool call deadline %s (at most %s) does not fit in the write timeout %s",
+			mcpserver.DefaultToolTimeout, maxToolTimeout, srv.WriteTimeout)
+	}
+}
+
+// TestServeDrainsOnShutdown cancels the server's context while a request
+// is in flight, and checks that the request still gets its answer, while
+// one that outlasts the shutdown timeout is cut off.
+func TestServeDrainsOnShutdown(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name      string
+		handling  time.Duration // how long the request takes after the stop
+		shutdown  time.Duration
+		wantError bool
+	}{
+		{name: "drained", handling: 100 * time.Millisecond, shutdown: 5 * time.Second},
+		{name: "cut off", handling: 5 * time.Second, shutdown: 100 * time.Millisecond, wantError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			entered := make(chan struct{})
+			h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				close(entered)
+				select {
+				case <-time.After(tt.handling):
+				case <-r.Context().Done():
+					return
+				}
+				_, _ = io.WriteString(w, "answered")
+			})
+			ln, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, stop := context.WithCancel(t.Context())
+			served := make(chan error, 1)
+			go func() { served <- serveUntilDone(ctx, newHTTPServer(h, discardLogger()), ln, tt.shutdown) }()
+
+			type answer struct {
+				body string
+				err  error
+			}
+			answered := make(chan answer, 1)
+			go func() {
+				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+ln.Addr().String()+"/", nil)
+				if err != nil {
+					answered <- answer{err: err}
+					return
+				}
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					answered <- answer{err: err}
+					return
+				}
+				defer resp.Body.Close()
+				b, err := io.ReadAll(resp.Body)
+				answered <- answer{body: string(b), err: err}
+			}()
+
+			<-entered
+			stop()
+			a := <-answered
+			err = <-served
+			switch {
+			case tt.wantError && (err == nil || a.err == nil):
+				t.Errorf("serve = %v, request = %q, %v; want both to fail once the shutdown timeout passes", err, a.body, a.err)
+			case !tt.wantError && (err != nil || a.err != nil || a.body != "answered"):
+				t.Errorf("serve = %v, request = %q, %v; want the request answered and a clean stop", err, a.body, a.err)
+			}
+		})
+	}
+}

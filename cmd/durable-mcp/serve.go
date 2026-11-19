@@ -337,7 +337,17 @@ func serveHTTP(ctx context.Context, server *mcp.Server, addr string, tokens *aut
 	}
 	srv := newHTTPServer(httpHandler(server, tokens, logger), logger)
 	logger.Info("Serving MCP over streamable HTTP", "URL", "http://"+ln.Addr().String()+mcpPath)
+	return serveUntilDone(ctx, srv, ln, httpShutdownTimeout)
+}
 
+// serveUntilDone serves srv on ln until ctx is canceled, then stops it
+// gracefully: it stops accepting connections and lets the requests in
+// flight finish, for up to shutdownTimeout, before it closes the rest.
+//
+// Requests do not inherit ctx, so the signal that stops the server does
+// not cancel them; each has its own bounds, the tool call deadline and the
+// server's write timeout.
+func serveUntilDone(ctx context.Context, srv *http.Server, ln net.Listener, shutdownTimeout time.Duration) error {
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 	select {
@@ -345,7 +355,7 @@ func serveHTTP(ctx context.Context, server *mcp.Server, addr string, tokens *aut
 		return err
 	case <-ctx.Done():
 	}
-	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), httpShutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		_ = srv.Close() // drop the requests that did not finish in time
