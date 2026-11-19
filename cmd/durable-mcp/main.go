@@ -21,10 +21,22 @@ import (
 var version = "dev"
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signalContext()
 	code := run(ctx, os.Args[1:], os.Getenv, os.Stdin, os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
+}
+
+// signalContext returns a context that SIGINT or SIGTERM cancels, which
+// starts a graceful stop: the HTTP server drains its requests, for up to
+// httpShutdownTimeout, and the worker lets running activities finish, for
+// up to workerStopTimeout. Once the context is canceled, it stops catching
+// the signals, so a second one gets Go's default handling and ends the
+// process at once, for an operator who does not want to wait.
+func signalContext() (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	context.AfterFunc(ctx, stop)
+	return ctx, stop
 }
 
 // run parses args and returns the process exit code. It takes its context,
