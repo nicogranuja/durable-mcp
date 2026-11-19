@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	commonpb "go.temporal.io/api/common/v1"
@@ -36,9 +38,42 @@ type fakeClient struct {
 	// answers, to change the run as if it finished concurrently.
 	beforeCancel func(*fakeJob)
 
+	// hang makes every call wait until its context is done and fail with
+	// its error, as calls do when Temporal does not answer.
+	hang atomic.Bool
+
 	starts  []client.StartWorkflowOptions
 	queries int
 	cancels []string // workflow ID and run ID, as "id/run"
+	calls   []fakeCall
+}
+
+// fakeCall records the context a method was called with.
+type fakeCall struct {
+	method   string
+	at       time.Time
+	deadline time.Time // zero if the context had none
+}
+
+// enter records a call to method and, if f.hang is set, waits until ctx
+// is done. It must be called without f.mu held.
+func (f *fakeClient) enter(ctx context.Context, method string) error {
+	deadline, _ := ctx.Deadline()
+	f.mu.Lock()
+	f.calls = append(f.calls, fakeCall{method: method, at: time.Now(), deadline: deadline})
+	f.mu.Unlock()
+	if f.hang.Load() {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return nil
+}
+
+// recorded returns the calls made so far.
+func (f *fakeClient) recorded() []fakeCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.calls)
 }
 
 // fakeJob is a workflow run.
@@ -82,6 +117,9 @@ func (f *fakeClient) add(id string, status enumspb.WorkflowExecutionStatus) *fak
 }
 
 func (f *fakeClient) ExecuteWorkflow(ctx context.Context, opts client.StartWorkflowOptions, workflow any, args ...any) (client.WorkflowRun, error) {
+	if err := f.enter(ctx, "ExecuteWorkflow"); err != nil {
+		return nil, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -111,6 +149,9 @@ func (f *fakeClient) ExecuteWorkflow(ctx context.Context, opts client.StartWorkf
 }
 
 func (f *fakeClient) DescribeWorkflowExecution(ctx context.Context, id, runID string) (*workflowservice.DescribeWorkflowExecutionResponse, error) {
+	if err := f.enter(ctx, "DescribeWorkflowExecution"); err != nil {
+		return nil, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -156,6 +197,9 @@ func (f *fakeClient) DescribeWorkflowExecution(ctx context.Context, id, runID st
 }
 
 func (f *fakeClient) QueryWorkflow(ctx context.Context, id, runID, queryType string, _ ...any) (converter.EncodedValue, error) {
+	if err := f.enter(ctx, "QueryWorkflow"); err != nil {
+		return nil, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -178,11 +222,18 @@ func (f *fakeClient) QueryWorkflow(ctx context.Context, id, runID, queryType str
 	return encoded(*j.progress)
 }
 
-func (f *fakeClient) GetWorkflow(_ context.Context, id, runID string) client.WorkflowRun {
+func (f *fakeClient) GetWorkflow(ctx context.Context, id, runID string) client.WorkflowRun {
+	deadline, _ := ctx.Deadline()
+	f.mu.Lock()
+	f.calls = append(f.calls, fakeCall{method: "GetWorkflow", at: time.Now(), deadline: deadline})
+	f.mu.Unlock()
 	return fakeRun{f: f, id: id, runID: runID}
 }
 
 func (f *fakeClient) CancelWorkflow(ctx context.Context, id, runID string) error {
+	if err := f.enter(ctx, "CancelWorkflow"); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -231,6 +282,9 @@ func (r fakeRun) Get(ctx context.Context, valuePtr any) error {
 }
 
 func (r fakeRun) GetWithOptions(ctx context.Context, valuePtr any, _ client.WorkflowRunGetOptions) error {
+	if err := r.f.enter(ctx, "WorkflowRun.Get"); err != nil {
+		return err
+	}
 	r.f.mu.Lock()
 	defer r.f.mu.Unlock()
 	if err := ctx.Err(); err != nil {

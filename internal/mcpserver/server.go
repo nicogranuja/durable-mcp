@@ -68,6 +68,11 @@ type Options struct {
 	// Logger receives the server's logs, including the details of Temporal
 	// errors that tool results leave out. Nil discards them.
 	Logger *slog.Logger
+
+	// ToolTimeout is the overall deadline of each tool call. Zero means
+	// DefaultToolTimeout. Over HTTP, keep it below the server's write
+	// timeout, so that a call that times out can still send its answer.
+	ToolTimeout time.Duration
 }
 
 // instructions tell the agent how the tools fit together.
@@ -91,6 +96,9 @@ func New(c Client, opts Options) *mcp.Server {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	if opts.ToolTimeout <= 0 {
+		opts.ToolTimeout = DefaultToolTimeout
+	}
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "durable-mcp", Version: opts.Version}, &mcp.ServerOptions{
 		Instructions: instructions,
@@ -99,7 +107,7 @@ func New(c Client, opts Options) *mcp.Server {
 		// 2026-07-28 deprecates: the server's logs go to its operator.
 		Capabilities: &mcp.ServerCapabilities{},
 	})
-	s.AddReceivingMiddleware(withCaller)
+	s.AddReceivingMiddleware(withCaller, withToolDeadline(opts.ToolTimeout, logger))
 	t := &tools{client: c, taskQueue: opts.TaskQueue, logger: logger}
 	t.register(s)
 	return s

@@ -19,8 +19,16 @@ import (
 // session connected to it.
 func connect(t *testing.T, f *fakeClient) *mcp.ClientSession {
 	t.Helper()
+	return connectWith(t, f, Options{})
+}
+
+// connectWith is connect with options for New. The task queue and version
+// are always the test ones.
+func connectWith(t *testing.T, f *fakeClient, opts Options) *mcp.ClientSession {
+	t.Helper()
+	opts.TaskQueue, opts.Version = "test-queue", "v0.0.0-test"
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	ss, err := New(f, Options{TaskQueue: "test-queue", Version: "v0.0.0-test"}).Connect(t.Context(), serverTransport, nil)
+	ss, err := New(f, opts).Connect(t.Context(), serverTransport, nil)
 	if err != nil {
 		t.Fatalf("server Connect: %v", err)
 	}
