@@ -29,18 +29,18 @@ func TestMain(m *testing.M) {
 // takes much longer than the test waits.
 func signalHelper() {
 	ctx, stop := signalContext()
-	defer stop()
 	fmt.Println("ready")
 	<-ctx.Done()
 	fmt.Println("draining")
 	time.Sleep(time.Minute)
+	stop()
 	os.Exit(0)
 }
 
 func TestSecondSignalKills(t *testing.T) {
 	t.Parallel()
 
-	cmd := exec.CommandContext(t.Context(), os.Args[0]) //nolint:gosec // G204: the test binary itself
+	cmd := exec.CommandContext(t.Context(), os.Args[0])
 	cmd.Env = append(os.Environ(), envSignalHelper+"=1")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
