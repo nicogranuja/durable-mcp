@@ -29,6 +29,11 @@
 //   - cancel_job requests cancellation. Repeating it, or canceling a
 //     finished job, changes nothing.
 //
+// Every tool call has an overall deadline, [DefaultToolTimeout] unless
+// [Options.ToolTimeout] says otherwise, and each Temporal call it makes
+// has a shorter one of its own, so a tool answers within the deadline
+// even when Temporal does not answer at all.
+//
 // Tool errors (IsError results) are for calls that could not be answered:
 // invalid arguments, an unknown job ID, or Temporal being unreachable.
 // Each says what happened and what to do next. A job that failed is not a

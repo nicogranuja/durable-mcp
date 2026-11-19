@@ -76,6 +76,35 @@ durable-mcp worker
 - **Progress and cancellation.** The `progress` query reports the phase and pages fetched so far. `cancel_job` cancels
   the workflow, which cancels the activity in flight; it notices through its heartbeat and aborts its request.
 
+## Timeouts
+
+Every wait has a bound, and each layer's bound fits inside the one above it, so a slow or unreachable dependency turns
+into an answer the agent can act on instead of a hung call.
+
+| Layer | Setting | Value | Why |
+|---|---|---|---|
+| HTTP server | read header | 10s | A client that sends headers slowly cannot hold a connection; the token check needs them first. |
+| | read | 30s | The whole request, body included. MCP requests are small. |
+| | write | 1m | From the end of the headers to the end of the response, so it must outlast the tool call deadline. |
+| | idle | 2m | How long a keep-alive connection waits for its next request. |
+| | shutdown | 10s | On SIGINT or SIGTERM, requests in flight get this long to finish; any still running are cut off. |
+| MCP server | tool call deadline | 30s | The whole tool call. `cancel_job` makes up to three Temporal calls of up to 10s each. Set with `-tool-timeout` (env `DURABLE_MCP_TOOL_TIMEOUT`), from 1s to 50s, which leaves 10s of the write timeout for the answer. |
+| Temporal client | each call from a tool | 10s | Start, describe, get result, and cancel. A call that runs out of time becomes a tool error that says what is safe to retry. |
+| | progress query | 5s | A query needs a worker to answer it; without one, `job_status` answers without progress instead of waiting. |
+| | health check at startup | 5s | `serve` starts anyway, and its tools say Temporal is unreachable until it is back. |
+| | GetSystemInfo on connect | 5s | The Temporal SDK's default, for the call the worker makes when it connects. |
+| GitHub client | each request | 30s | Includes reading the body. |
+| | response size | 10 MiB | A page of 100 issues is well under 1 MiB; a larger body fails instead of filling memory. |
+| Report activities | start-to-close | 1m | One attempt at one page; longer than the GitHub timeout, so the client's more specific error comes first. |
+| | heartbeat | 10s | Notices a lost worker sooner, and bounds how long a cancellation takes to reach a running request. |
+| | schedule-to-close | 2h, at most 10 attempts | A page's whole budget, retries included; it outlasts GitHub's longest normal rate-limit reset, an hour. |
+| Report job | execution timeout | 24h | The slowest legitimate report, on a worker without a GitHub token, takes about ten hours. |
+| Worker | stop timeout | 1m | Matches start-to-close, so a page being fetched can finish instead of being retried elsewhere. |
+
+The first SIGINT or SIGTERM starts a graceful stop; a second one ends the process at once. When running under a
+supervisor or in a container, give it a stop grace period of at least 70 seconds (for example, `docker stop -t 70`, or
+`terminationGracePeriodSeconds: 70` on Kubernetes), so that a stopping worker gets its full minute before it is killed.
+
 ## Running it locally
 
 You need a Temporal server, the worker, and the MCP server. The [Temporal CLI](https://docs.temporal.io/cli) starts a
