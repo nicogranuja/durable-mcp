@@ -50,9 +50,10 @@ func TestParseServeFlags(t *testing.T) {
 		{
 			name: "defaults suit a local development server",
 			want: serveConfig{
-				temporal:  temporalConfig{address: "localhost:7233", namespace: "default", taskQueue: "durable-mcp"},
-				transport: "stdio",
-				httpAddr:  "127.0.0.1:8080",
+				temporal:    temporalConfig{address: "localhost:7233", namespace: "default", taskQueue: "durable-mcp"},
+				transport:   "stdio",
+				httpAddr:    "127.0.0.1:8080",
+				toolTimeout: 30 * time.Second,
 			},
 		},
 		{
@@ -60,21 +61,28 @@ func TestParseServeFlags(t *testing.T) {
 			env: map[string]string{
 				"TEMPORAL_ADDRESS": "temporal.internal:7233", "DURABLE_MCP_TASK_QUEUE": "reports",
 				"DURABLE_MCP_TRANSPORT": "http", "DURABLE_MCP_HTTP_ADDR": "[::1]:9000",
+				"DURABLE_MCP_TOOL_TIMEOUT": "20s",
 			},
 			want: serveConfig{
-				temporal:  temporalConfig{address: "temporal.internal:7233", namespace: "default", taskQueue: "reports"},
-				transport: "http",
-				httpAddr:  "[::1]:9000",
+				temporal:    temporalConfig{address: "temporal.internal:7233", namespace: "default", taskQueue: "reports"},
+				transport:   "http",
+				httpAddr:    "[::1]:9000",
+				toolTimeout: 20 * time.Second,
 			},
 		},
 		{
 			name: "flags override the environment",
-			args: []string{"-transport", "http", "-http-addr", "127.0.0.1:0", "-task-queue", "q"},
-			env:  map[string]string{"DURABLE_MCP_TRANSPORT": "stdio", "DURABLE_MCP_TASK_QUEUE": "reports"},
+			args: []string{"-transport", "http", "-http-addr", "127.0.0.1:0", "-task-queue", "q", "-tool-timeout", "45s"},
+			env: map[string]string{
+				"DURABLE_MCP_TRANSPORT": "stdio", "DURABLE_MCP_TASK_QUEUE": "reports",
+				// A flag also overrides a variable that does not parse.
+				"DURABLE_MCP_TOOL_TIMEOUT": "soon",
+			},
 			want: serveConfig{
-				temporal:  temporalConfig{address: "localhost:7233", namespace: "default", taskQueue: "q"},
-				transport: "http",
-				httpAddr:  "127.0.0.1:0",
+				temporal:    temporalConfig{address: "localhost:7233", namespace: "default", taskQueue: "q"},
+				transport:   "http",
+				httpAddr:    "127.0.0.1:0",
+				toolTimeout: 45 * time.Second,
 			},
 		},
 		{
@@ -82,9 +90,10 @@ func TestParseServeFlags(t *testing.T) {
 			name: "stdio ignores the HTTP address",
 			args: []string{"-http-addr", "0.0.0.0:8080"},
 			want: serveConfig{
-				temporal:  temporalConfig{address: "localhost:7233", namespace: "default", taskQueue: "durable-mcp"},
-				transport: "stdio",
-				httpAddr:  "0.0.0.0:8080",
+				temporal:    temporalConfig{address: "localhost:7233", namespace: "default", taskQueue: "durable-mcp"},
+				transport:   "stdio",
+				httpAddr:    "0.0.0.0:8080",
+				toolTimeout: 30 * time.Second,
 			},
 		},
 	}
@@ -98,6 +107,31 @@ func TestParseServeFlags(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("parseServeFlags() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseServeFlagsToolTimeout(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		args []string
+		env  map[string]string
+		want string
+	}{
+		{name: "too short", args: []string{"-tool-timeout", "500ms"}, want: "-tool-timeout must be from 1s to 50s, got 500ms"},
+		{name: "too long for the write timeout", args: []string{"-tool-timeout", "1m"}, want: "-tool-timeout must be from 1s to 50s, got 1m0s"},
+		{name: "variable out of range", env: map[string]string{"DURABLE_MCP_TOOL_TIMEOUT": "0s"}, want: "got 0s"},
+		{name: "variable not a duration", env: map[string]string{"DURABLE_MCP_TOOL_TIMEOUT": "30"}, want: `DURABLE_MCP_TOOL_TIMEOUT: "30" is not a duration`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var stderr bytes.Buffer
+			_, err := parseServeFlags(tt.args, env(tt.env), &stderr)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("parseServeFlags() error = %v, want one containing %q", err, tt.want)
 			}
 		})
 	}

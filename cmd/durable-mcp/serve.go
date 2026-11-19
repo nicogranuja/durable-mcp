@@ -35,9 +35,26 @@ const (
 	// mcpPath is the URL path of the streamable HTTP endpoint.
 	mcpPath = "/mcp"
 
+	// HTTP server timeouts. No tool streams or takes long, and stateless
+	// mode has no long-lived GET stream, so every request can be bounded.
+	// The write timeout runs from the end of the request headers to the end
+	// of the response, so it must outlast the longest tool call.
+	httpReadHeaderTimeout = 10 * time.Second
+	httpReadTimeout       = 30 * time.Second
+	httpWriteTimeout      = time.Minute
+	httpIdleTimeout       = 2 * time.Minute
+
 	// httpShutdownTimeout is how long a stopping HTTP server lets requests
-	// in flight finish. Tool calls return within seconds.
+	// in flight finish. Tool calls normally return within seconds; one that
+	// is still running when it ends is cut off, and the client sees the
+	// connection drop.
 	httpShutdownTimeout = 10 * time.Second
+
+	// The bounds of -tool-timeout. The upper bound leaves a call that times
+	// out 10 seconds of the HTTP write timeout to send its answer.
+	minToolTimeout = time.Second
+	maxToolTimeout = httpWriteTimeout - 10*time.Second
+	envToolTimeout = "DURABLE_MCP_TOOL_TIMEOUT"
 
 	// maxHeaderBytes bounds a request's headers, well below net/http's
 	// 1 MiB default: an MCP request needs a few short headers, and the
@@ -60,6 +77,9 @@ type serveConfig struct {
 	transport string
 	httpAddr  string
 
+	// toolTimeout is the overall deadline of each tool call.
+	toolTimeout time.Duration
+
 	// tokens are the callers the HTTP transport accepts, or nil to accept
 	// anyone, which only a loopback address allows.
 	tokens *auth.Tokens
@@ -79,6 +99,9 @@ func parseServeFlags(args []string, getenv func(string) string, stderr io.Writer
 		"MCP `transport`: stdio, or http for streamable HTTP (env DURABLE_MCP_TRANSPORT)")
 	fs.StringVar(&cfg.httpAddr, "http-addr", envOr(getenv, "DURABLE_MCP_HTTP_ADDR", defaultHTTPAddr),
 		"`host:port` for the http transport to listen on; without auth tokens, the host must be a loopback IP address (env DURABLE_MCP_HTTP_ADDR)")
+	toolTimeout, envErr := envDuration(getenv, envToolTimeout, mcpserver.DefaultToolTimeout)
+	fs.DurationVar(&cfg.toolTimeout, "tool-timeout", toolTimeout,
+		fmt.Sprintf("overall `deadline` of each tool call, from %s to %s (env %s)", minToolTimeout, maxToolTimeout, envToolTimeout))
 	var tokensFile string
 	fs.StringVar(&tokensFile, "auth-tokens-file", getenv(envAuthTokensFile),
 		"`file` of callers the http transport accepts, one name:sha256-of-token entry per line, as \"durable-mcp token\" prints (env "+
@@ -113,6 +136,10 @@ Flags:
 	case err != nil:
 	case fs.NArg() > 0:
 		err = fmt.Errorf("unexpected arguments: %q", fs.Args())
+	case envErr != nil && !flagSet(fs, "tool-timeout"):
+		err = envErr
+	case cfg.toolTimeout < minToolTimeout || cfg.toolTimeout > maxToolTimeout:
+		err = fmt.Errorf("-tool-timeout must be from %s to %s, got %s", minToolTimeout, maxToolTimeout, cfg.toolTimeout)
 	case cfg.transport != transportStdio && cfg.transport != transportHTTP:
 		err = fmt.Errorf("-transport must be %s or %s, got %q", transportStdio, transportHTTP, cfg.transport)
 	case tokensFile != "" && tokenList != "":
@@ -144,6 +171,28 @@ Flags:
 		return serveConfig{}, err
 	}
 	return cfg, nil
+}
+
+// envDuration returns the duration in the environment variable key, or
+// fallback if it is unset or empty. On a parse error it returns fallback
+// and the error, for the caller to report unless a flag overrides it.
+func envDuration(getenv func(string) string, key string, fallback time.Duration) (time.Duration, error) {
+	v := getenv(key)
+	if v == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return fallback, fmt.Errorf("%s: %q is not a duration such as 30s", key, v)
+	}
+	return d, nil
+}
+
+// flagSet reports whether the flag name was set on the command line.
+func flagSet(fs *flag.FlagSet, name string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) { set = set || f.Name == name })
+	return set
 }
 
 // loadTokens reads the auth tokens from the file, or else from the list.
@@ -239,7 +288,12 @@ func serveMCP(ctx context.Context, cfg serveConfig, stdin io.ReadCloser, stdout 
 	}
 	cancel()
 
-	server := mcpserver.New(c, mcpserver.Options{TaskQueue: cfg.temporal.taskQueue, Version: version, Logger: logger})
+	server := mcpserver.New(c, mcpserver.Options{
+		TaskQueue:   cfg.temporal.taskQueue,
+		Version:     version,
+		Logger:      logger,
+		ToolTimeout: cfg.toolTimeout,
+	})
 	logAuth(cfg, logger)
 	if cfg.transport == transportHTTP {
 		return serveHTTP(ctx, server, cfg.httpAddr, cfg.tokens, logger)
@@ -306,13 +360,11 @@ func serveHTTP(ctx context.Context, server *mcp.Server, addr string, tokens *aut
 // newHTTPServer returns the HTTP server for h.
 func newHTTPServer(h http.Handler, logger *slog.Logger) *http.Server {
 	return &http.Server{
-		Handler: h,
-		// No tool streams or takes long, and stateless mode has no
-		// long-lived GET stream, so every request can be bounded.
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      time.Minute,
-		IdleTimeout:       2 * time.Minute,
+		Handler:           h,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		ReadTimeout:       httpReadTimeout,
+		WriteTimeout:      httpWriteTimeout,
+		IdleTimeout:       httpIdleTimeout,
 		MaxHeaderBytes:    maxHeaderBytes,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
