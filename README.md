@@ -275,14 +275,14 @@ On stop, each command exports its last metrics, for up to 5 seconds. Metrics car
 | `durable_mcp.jobs.finished` (`durable_mcp_jobs_finished_total`) | counter | `durable_mcp.job.outcome` (`completed`, `failed`, `canceled`), `error.type` | worker (workflow) |
 | `durable_mcp.activity.attempts` (`durable_mcp_activity_attempts_total`) | counter | `durable_mcp.activity.name`, `durable_mcp.activity.retry`, `error.type` | worker |
 | `durable_mcp.github.rate_limit.wait.duration` (`durable_mcp_github_rate_limit_wait_duration_seconds`) | histogram, s | `durable_mcp.github.rate_limit.kind` (`primary`, `secondary`) | worker |
-| `temporal_*` | Temporal SDK | the SDK's (namespace, task queue, workflow and activity type) | both |
+| `temporal_*` | Temporal SDK | the SDK's own, such as `namespace`, `task_queue`, `workflow_type`, `activity_type` | both |
 
 Every attribute value comes from a fixed set, so the number of time series does not grow with use: method and tool
 names the server does not know become `_OTHER`, and no metric is labeled with a job ID, repository, or caller. Those
 belong in logs and in Temporal. The workflow's metric skips replays, and is recorded after the workflow returns, so a
 job is counted once. Activity attempts count the retries that Temporal keeps out of workflow history.
 
-A Grafana dashboard for these metrics comes next, in `deploy/grafana/`. Traces are not exported yet.
+A Grafana dashboard for these metrics comes next (Day 9 of the roadmap), in `deploy/grafana/`. Traces are not exported yet.
 
 ## Running the tests
 
