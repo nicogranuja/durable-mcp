@@ -28,6 +28,7 @@ cmd/durable-mcp/      command entry point: "serve" runs the MCP server, "worker"
 internal/mcpserver/   the MCP tools, on an interface over the Temporal client
 internal/report/      the repository report as a Temporal workflow and activities
 internal/github/      GitHub REST API client
+internal/telemetry/   OpenTelemetry metrics setup: OTLP, Prometheus, and the Temporal SDK handler
 ```
 
 The design notes live in package documentation: the [MCP tools](internal/mcpserver/doc.go), including job IDs and
@@ -249,6 +250,39 @@ temporal workflow start --task-queue durable-mcp --type RepositoryReport \
 ```
 
 The MCP tools only accept job IDs that `start_report` issues, so they will not show a workflow started this way.
+
+## Observability
+
+Both commands record OpenTelemetry metrics, the Temporal SDK's own included. Telemetry is off by default: a plain run
+makes no network calls and opens no extra port. Turn it on either or both ways:
+
+- **Prometheus (pull):** `-metrics-addr host:port` (env `DURABLE_MCP_METRICS_ADDR`) serves `/metrics` from a private
+  registry. A bare `:9464` listens on `127.0.0.1`; name the host, such as `0.0.0.0:9464`, to listen beyond loopback.
+  Give `serve` and `worker` different ports when they share a host.
+- **OTLP (push):** set `OTEL_METRICS_EXPORTER=otlp` (or `console`, for stdout), or an endpoint in
+  `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`. The standard `OTEL_*` variables configure
+  the exporter (`OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_METRIC_EXPORT_INTERVAL`,
+  `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`). `OTEL_METRICS_EXPORTER=none` turns it off; `prometheus` is
+  rejected in favor of `-metrics-addr`.
+
+On stop, each command exports its last metrics, for up to 5 seconds. Metrics carry `service.name=durable-mcp` and
+`durable_mcp.component=serve` or `worker`.
+
+| Metric (Prometheus name) | Type | Attributes | Recorded by |
+|---|---|---|---|
+| `mcp.server.operation.duration` (`mcp_server_operation_duration_seconds`) | histogram, s | `mcp.method.name`, `gen_ai.tool.name`, `error.type` (`tool_error` or the JSON-RPC code) | serve |
+| `durable_mcp.jobs.started` (`durable_mcp_jobs_started_total`) | counter | none | serve |
+| `durable_mcp.jobs.finished` (`durable_mcp_jobs_finished_total`) | counter | `durable_mcp.job.outcome` (`completed`, `failed`, `canceled`), `error.type` | worker (workflow) |
+| `durable_mcp.activity.attempts` (`durable_mcp_activity_attempts_total`) | counter | `durable_mcp.activity.name`, `durable_mcp.activity.retry`, `error.type` | worker |
+| `durable_mcp.github.rate_limit.wait.duration` (`durable_mcp_github_rate_limit_wait_duration_seconds`) | histogram, s | `durable_mcp.github.rate_limit.kind` (`primary`, `secondary`) | worker |
+| `temporal_*` | Temporal SDK | the SDK's (namespace, task queue, workflow and activity type) | both |
+
+Every attribute value comes from a fixed set, so the number of time series does not grow with use: method and tool
+names the server does not know become `_OTHER`, and no metric is labeled with a job ID, repository, or caller. Those
+belong in logs and in Temporal. The workflow's metric skips replays, and is recorded after the workflow returns, so a
+job is counted once. Activity attempts count the retries that Temporal keeps out of workflow history.
+
+A Grafana dashboard for these metrics comes next, in `deploy/grafana/`. Traces are not exported yet.
 
 ## Running the tests
 
