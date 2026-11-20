@@ -133,7 +133,9 @@ func boundedName(known []string, name string) string {
 // semantic conventions advise, or tool_error for a tool error.
 func operationErrorType(res mcp.Result, err error) string {
 	if err != nil {
-		if wire, ok := errors.AsType[*jsonrpc.Error](err); ok {
+		// Only codes in the range JSON-RPC reserves, which the SDK uses;
+		// any other code could be anything.
+		if wire, ok := errors.AsType[*jsonrpc.Error](err); ok && wire.Code >= -32768 && wire.Code <= -32000 {
 			return strconv.FormatInt(wire.Code, 10)
 		}
 		return otherValue

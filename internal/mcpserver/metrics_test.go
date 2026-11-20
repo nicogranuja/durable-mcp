@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -82,6 +83,27 @@ func TestBoundedNames(t *testing.T) {
 	} {
 		if got := boundedName(tt.known, tt.in); got != tt.want {
 			t.Errorf("boundedName(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestOperationErrorType(t *testing.T) {
+	t.Parallel()
+
+	toolErr := &mcp.CallToolResult{IsError: true}
+	for _, tt := range []struct {
+		res  mcp.Result
+		err  error
+		want string
+	}{
+		{&mcp.CallToolResult{}, nil, ""},
+		{toolErr, nil, errorTypeToolError},
+		{nil, &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound}, "-32601"},
+		{nil, &jsonrpc.Error{Code: 123456789}, otherValue},
+		{nil, errors.New("boom"), otherValue},
+	} {
+		if got := operationErrorType(tt.res, tt.err); got != tt.want {
+			t.Errorf("operationErrorType(%v, %v) = %q, want %q", tt.res, tt.err, got, tt.want)
 		}
 	}
 }
