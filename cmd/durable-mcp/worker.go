@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/worker"
 
@@ -36,6 +37,7 @@ const (
 // environment.
 type workerConfig struct {
 	temporal     temporalConfig
+	metrics      metricsConfig
 	githubAPIURL string
 	githubToken  string
 }
@@ -49,6 +51,7 @@ func parseWorkerFlags(args []string, getenv func(string) string, stderr io.Write
 	fs := flag.NewFlagSet("durable-mcp worker", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cfg.temporal.register(fs, getenv, "poll")
+	cfg.metrics.register(fs, getenv)
 	fs.StringVar(&cfg.githubAPIURL, "github-api-url", envOr(getenv, "GITHUB_API_URL", github.DefaultBaseURL),
 		"GitHub REST API `URL`, for GitHub Enterprise Server (env GITHUB_API_URL)")
 	fs.Usage = func() {
@@ -73,7 +76,7 @@ Flags:
 	if err := fs.Parse(args); err != nil {
 		return workerConfig{}, err
 	}
-	err := cfg.temporal.check()
+	err := errors.Join(cfg.temporal.check(), cfg.metrics.check())
 	if fs.NArg() > 0 {
 		err = fmt.Errorf("unexpected arguments: %q", fs.Args())
 	}
@@ -115,10 +118,19 @@ func serveWorker(ctx context.Context, cfg workerConfig, logger *slog.Logger) err
 		logger.Warn("GITHUB_TOKEN is not set: GitHub allows 60 unauthenticated requests per hour, for public repositories only")
 	}
 
+	tel, stopTelemetry, err := startTelemetry(ctx, "worker", cfg.metrics, logger)
+	if err != nil {
+		return err
+	}
+	// Deferred before the client closes, so it runs after: the worker's
+	// last metrics are exported once it has stopped.
+	defer stopTelemetry()
+
 	c, err := client.DialContext(ctx, client.Options{
-		HostPort:  cfg.temporal.address,
-		Namespace: cfg.temporal.namespace,
-		Logger:    log.NewStructuredLogger(logger),
+		HostPort:       cfg.temporal.address,
+		Namespace:      cfg.temporal.namespace,
+		Logger:         log.NewStructuredLogger(logger),
+		MetricsHandler: tel.TemporalMetricsHandler(),
 	})
 	if err != nil {
 		return fmt.Errorf("connect to Temporal at %s: %w", cfg.temporal.address, err)
@@ -130,6 +142,8 @@ func serveWorker(ctx context.Context, cfg workerConfig, logger *slog.Logger) err
 		WorkerStopTimeout:                  workerStopTimeout,
 		// The workflow schedules activities by name; see report.Register.
 		DisableRegistrationAliasing: true,
+		// Counts every activity attempt, retries included.
+		Interceptors: []interceptor.WorkerInterceptor{report.NewMetricsInterceptor()},
 	})
 	report.Register(w, report.NewActivities(gh))
 

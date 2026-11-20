@@ -74,6 +74,7 @@ const (
 // environment.
 type serveConfig struct {
 	temporal  temporalConfig
+	metrics   metricsConfig
 	transport string
 	httpAddr  string
 
@@ -95,6 +96,7 @@ func parseServeFlags(args []string, getenv func(string) string, stderr io.Writer
 	fs := flag.NewFlagSet("durable-mcp serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cfg.temporal.register(fs, getenv, "start reports on")
+	cfg.metrics.register(fs, getenv)
 	fs.StringVar(&cfg.transport, "transport", envOr(getenv, "DURABLE_MCP_TRANSPORT", transportStdio),
 		"MCP `transport`: stdio, or http for streamable HTTP (env DURABLE_MCP_TRANSPORT)")
 	fs.StringVar(&cfg.httpAddr, "http-addr", envOr(getenv, "DURABLE_MCP_HTTP_ADDR", defaultHTTPAddr),
@@ -131,7 +133,7 @@ Flags:
 		return serveConfig{}, err
 	}
 	tokenList := getenv(envAuthTokens)
-	err := cfg.temporal.check()
+	err := errors.Join(cfg.temporal.check(), cfg.metrics.check())
 	switch {
 	case err != nil:
 	case fs.NArg() > 0:
@@ -269,13 +271,22 @@ func runServe(ctx context.Context, args []string, getenv func(string) string, st
 
 // serveMCP runs the MCP server on the configured transport.
 func serveMCP(ctx context.Context, cfg serveConfig, stdin io.ReadCloser, stdout io.Writer, logger *slog.Logger) error {
+	tel, stopTelemetry, err := startTelemetry(ctx, "serve", cfg.metrics, logger)
+	if err != nil {
+		return err
+	}
+	// Deferred first, so it runs last: the client's metrics are recorded
+	// until it closes.
+	defer stopTelemetry()
+
 	// A lazy client connects on first use, so the server starts, and lists
 	// its tools, even while Temporal is down; the tools then say that
 	// Temporal is unreachable, and work once it is back.
 	c, err := client.NewLazyClient(client.Options{
-		HostPort:  cfg.temporal.address,
-		Namespace: cfg.temporal.namespace,
-		Logger:    log.NewStructuredLogger(logger),
+		HostPort:       cfg.temporal.address,
+		Namespace:      cfg.temporal.namespace,
+		Logger:         log.NewStructuredLogger(logger),
+		MetricsHandler: tel.TemporalMetricsHandler(),
 	})
 	if err != nil {
 		return fmt.Errorf("configure the Temporal client for %s: %w", cfg.temporal.address, err)
@@ -289,10 +300,11 @@ func serveMCP(ctx context.Context, cfg serveConfig, stdin io.ReadCloser, stdout 
 	cancel()
 
 	server := mcpserver.New(c, mcpserver.Options{
-		TaskQueue:   cfg.temporal.taskQueue,
-		Version:     version,
-		Logger:      logger,
-		ToolTimeout: cfg.toolTimeout,
+		TaskQueue:     cfg.temporal.taskQueue,
+		Version:       version,
+		Logger:        logger,
+		ToolTimeout:   cfg.toolTimeout,
+		MeterProvider: tel.MeterProvider(),
 	})
 	logAuth(cfg, logger)
 	if cfg.transport == transportHTTP {
