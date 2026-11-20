@@ -164,7 +164,17 @@ func activityOptions() workflow.ActivityOptions {
 // The ProgressQuery query reports how far it has got. Canceling the
 // workflow cancels the activity in flight and ends the report in
 // PhaseCanceled.
-func RepositoryReport(ctx workflow.Context, req Request) (_ Report, err error) {
+//
+// Once the report ends, it counts itself in MetricJobsFinished.
+func RepositoryReport(ctx workflow.Context, req Request) (Report, error) {
+	r, err := repositoryReport(ctx, req)
+	// Here, not in a deferred function, which also runs on cache eviction.
+	recordFinished(ctx, err)
+	return r, err
+}
+
+// repositoryReport is RepositoryReport, before the report is counted.
+func repositoryReport(ctx workflow.Context, req Request) (_ Report, err error) {
 	progress := Progress{Phase: PhaseStarted}
 	err = workflow.SetQueryHandlerWithOptions(ctx, ProgressQuery,
 		func() (Progress, error) { return progress, nil },

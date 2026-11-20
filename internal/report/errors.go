@@ -149,6 +149,7 @@ func activityError(ctx context.Context, err error) error {
 		delay := rateLimitDelay(rl, activity.GetInfo(ctx).Attempt, time.Now())
 		activity.GetLogger(ctx).Info("GitHub rate limit hit; retrying after the delay",
 			"Kind", rl.Kind.String(), "Delay", delay)
+		recordRateLimitWait(ctx, rl.Kind, delay)
 		return temporal.NewApplicationErrorWithOptions(rl.Error(), ErrorTypeRateLimited, temporal.ApplicationErrorOptions{
 			NextRetryDelay: delay,
 			// Rate limits are expected in normal operation. A benign error
