@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.opentelemetry.io/otel/metric"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
@@ -73,6 +74,10 @@ type Options struct {
 	// DefaultToolTimeout. Over HTTP, keep it below the server's write
 	// timeout, so that a call that times out can still send its answer.
 	ToolTimeout time.Duration
+
+	// MeterProvider receives the server's metrics: see
+	// MetricOperationDuration and MetricJobsStarted. Nil records none.
+	MeterProvider metric.MeterProvider
 }
 
 // instructions tell the agent how the tools fit together.
@@ -107,8 +112,9 @@ func New(c Client, opts Options) *mcp.Server {
 		// 2026-07-28 deprecates: the server's logs go to its operator.
 		Capabilities: &mcp.ServerCapabilities{},
 	})
-	s.AddReceivingMiddleware(withCaller, withToolDeadline(opts.ToolTimeout, logger))
-	t := &tools{client: c, taskQueue: opts.TaskQueue, logger: logger}
+	inst := newInstruments(opts.MeterProvider)
+	s.AddReceivingMiddleware(withMetrics(inst), withCaller, withToolDeadline(opts.ToolTimeout, logger))
+	t := &tools{client: c, taskQueue: opts.TaskQueue, logger: logger, metrics: inst}
 	t.register(s)
 	return s
 }
@@ -137,6 +143,7 @@ type tools struct {
 	client    Client
 	taskQueue string
 	logger    *slog.Logger
+	metrics   instruments
 }
 
 func (t *tools) register(s *mcp.Server) {

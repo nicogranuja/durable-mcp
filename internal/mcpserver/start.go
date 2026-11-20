@@ -162,6 +162,7 @@ func (t *tools) startReport(ctx context.Context, _ *mcp.CallToolRequest, in Star
 		return nil, StartReportOutput{}, t.startError(startCtx, jobID, in.IdempotencyKey != "", err)
 	}
 	t.logger.Info("Started report job", "JobID", jobID, "Caller", caller, "Owner", req.Owner, "Repo", req.Repo)
+	t.metrics.jobsStarted.Add(context.WithoutCancel(ctx), 1)
 	return nil, StartReportOutput{
 		JobID:   jobID,
 		Status:  statusRunning,

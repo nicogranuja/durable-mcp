@@ -14,7 +14,7 @@ import (
 
 // newTools returns the tools on a fake client.
 func newTools(f *fakeClient) *tools {
-	return &tools{client: f, taskQueue: "test-queue", logger: discardLogger()}
+	return &tools{client: f, taskQueue: "test-queue", logger: discardLogger(), metrics: newInstruments(nil)}
 }
 
 func TestStartReportValidation(t *testing.T) {
