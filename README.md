@@ -17,7 +17,7 @@ requests, and commit activity, fetched through the GitHub REST API with paginati
       policies), a worker command, and workflow tests.
 - [x] **MCP server:** `start_report`, `job_status`, `job_result`, and `cancel_job` tools on a Temporal client, over
       stdio and streamable HTTP, with a "use it from Claude Code" guide.
-- [ ] **Hardening:** idempotent starts, timeouts and cancellation end to end, input validation, an error taxonomy
+- [x] **Hardening:** idempotent starts, timeouts and cancellation end to end, input validation, an error taxonomy
       agents can act on, OpenTelemetry metrics and traces, a Grafana dashboard, and bearer-token auth.
 - [ ] **Docs and release:** architecture and design notes, an operations runbook, a Dockerfile, and v0.1.0.
 
@@ -29,6 +29,7 @@ internal/mcpserver/   the MCP tools, on an interface over the Temporal client
 internal/report/      the repository report as a Temporal workflow and activities
 internal/github/      GitHub REST API client
 internal/telemetry/   OpenTelemetry metrics setup: OTLP, Prometheus, and the Temporal SDK handler
+deploy/grafana/       Grafana dashboard for the Prometheus metrics
 ```
 
 The design notes live in package documentation: the [MCP tools](internal/mcpserver/doc.go), including job IDs and
@@ -313,7 +314,22 @@ in any other text, such as an error message that quotes a URL, are redacted. Str
 unless `OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT` says otherwise. A test sends a canary token through an
 authenticated request, a rejected one, and the GitHub client, and checks it is in no span.
 
-A Grafana dashboard for these metrics comes next, in `deploy/grafana/`.
+### Grafana dashboard
+
+[`deploy/grafana/durable-mcp.json`](deploy/grafana/durable-mcp.json) charts the metrics above: tool call latency
+(p50, p95) and error rate by tool, requests to `/mcp` by status (401s are rejected tokens), jobs started and finished
+by outcome, failed jobs by error type, GitHub requests by status and their duration, rate-limit waits, and activity
+attempts, retries, and failed attempts.
+
+To use it, run `serve` and `worker` with `-metrics-addr`, have Prometheus scrape both, and then in Grafana go to
+**Dashboards → New → Import**, upload the file (or paste it), and pick the Prometheus data source. The `datasource`
+variable at the top of the dashboard switches it to another one later. Metrics pushed over OTLP fit it too, if the backend
+names them the way the Prometheus exporter does: dots become underscores, and the unit and `_total` suffixes are
+added.
+
+A test keeps the dashboard in step with the code: it runs a tool call through serve's HTTP handler, a rejected
+token, and two reports through the Temporal test suite against a fake GitHub API, scrapes the same Prometheus
+exporter `-metrics-addr` serves, and fails if any query names a metric or label that is not in the scrape.
 
 ## Running the tests
 
@@ -337,6 +353,8 @@ No test needs a Temporal server, a GitHub token, or the network:
 - The MCP tool tests use a fake Temporal client, and protocol tests connect a real MCP client to the server over the
   SDK's in-memory transport, list the tools, check their schemas, and call each one. The command tests run the server
   over stdio pipes and streamable HTTP.
+- A dashboard test runs those paths into a Prometheus registry and checks that every metric and label the
+  [Grafana dashboard](deploy/grafana/durable-mcp.json) queries is emitted.
 
 ## How this was built
 
