@@ -10,6 +10,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
@@ -78,6 +79,10 @@ type Options struct {
 	// MeterProvider receives the server's metrics: see
 	// MetricOperationDuration and MetricJobsStarted. Nil records none.
 	MeterProvider metric.MeterProvider
+
+	// TracerProvider receives a span per request: see withTracing. Nil
+	// records none.
+	TracerProvider trace.TracerProvider
 }
 
 // instructions tell the agent how the tools fit together.
@@ -113,7 +118,7 @@ func New(c Client, opts Options) *mcp.Server {
 		Capabilities: &mcp.ServerCapabilities{},
 	})
 	inst := newInstruments(opts.MeterProvider)
-	s.AddReceivingMiddleware(withMetrics(inst), withCaller, withToolDeadline(opts.ToolTimeout, logger))
+	s.AddReceivingMiddleware(withTracing(opts.TracerProvider), withMetrics(inst), withCaller, withToolDeadline(opts.ToolTimeout, logger))
 	t := &tools{client: c, taskQueue: opts.TaskQueue, logger: logger, metrics: inst}
 	t.register(s)
 	return s

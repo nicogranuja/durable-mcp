@@ -97,8 +97,8 @@ func newInstruments(mp metric.MeterProvider) instruments {
 }
 
 // withMetrics returns receiving middleware that records how long each
-// request takes in MetricOperationDuration. It is the outermost
-// middleware, so the duration includes the tool call deadline's answer.
+// request takes in MetricOperationDuration. Only the tracing middleware is
+// outside it, so the duration includes the tool call deadline's answer.
 func withMetrics(inst instruments) mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
