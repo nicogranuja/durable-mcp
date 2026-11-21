@@ -241,7 +241,7 @@ func TestHTTPServerMetricsIgnoreHost(t *testing.T) {
 			for _, p := range points {
 				for _, k := range serverAttributesDenied {
 					if v, ok := p.Attributes.Value(k); ok {
-						t.Errorf("%s has %s=%q", m.Name, k, v.Emit())
+						t.Errorf("%s has %s=%q", m.Name, k, v.String())
 					}
 				}
 			}
