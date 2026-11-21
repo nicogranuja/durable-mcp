@@ -1,5 +1,5 @@
-// Package telemetry sets up OpenTelemetry metrics for the serve and worker
-// commands.
+// Package telemetry sets up OpenTelemetry metrics and traces for the serve
+// and worker commands.
 //
 // Telemetry is off unless it is asked for, so that a default run makes no
 // network calls and opens no ports. There are two ways to turn it on, and
@@ -15,6 +15,11 @@
 //
 // The Temporal SDK's own metrics (temporal_*) go through the same meter
 // provider, through [Telemetry.TemporalMetricsHandler].
+//
+// Traces are exported over OTLP only, and only if OTEL_TRACES_EXPORTER or
+// an OTLP endpoint (OTEL_EXPORTER_OTLP_ENDPOINT or
+// OTEL_EXPORTER_OTLP_TRACES_ENDPOINT) is set. Every span goes through a
+// policy that keeps credentials out of it: see redactingExporter.
 package telemetry
 
 import (
@@ -34,8 +39,11 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 	"go.temporal.io/sdk/client"
 	temporalotel "go.temporal.io/sdk/contrib/opentelemetry"
 )
@@ -78,22 +86,28 @@ type Config struct {
 	// Logger receives errors from the Temporal SDK's metrics. Nil
 	// discards them.
 	Logger *slog.Logger
+
+	// SpanExporter, if set, receives the traces, each span as it ends,
+	// instead of the exporter the environment configures. For tests.
+	SpanExporter sdktrace.SpanExporter
 }
 
-// Telemetry holds the configured meter provider.
+// Telemetry holds the configured meter and tracer providers.
 type Telemetry struct {
-	meterProvider metric.MeterProvider
-	shutdown      func(context.Context) error
-	prometheus    http.Handler
-	logger        *slog.Logger
-	pushing       bool
+	meterProvider  metric.MeterProvider
+	tracerProvider trace.TracerProvider
+	shutdown       []func(context.Context) error
+	prometheus     http.Handler
+	logger         *slog.Logger
+	pushing        bool
+	tracing        bool
 }
 
-// New sets up metrics as cfg and the environment say. With neither, it
-// returns a Telemetry whose meter provider records nothing.
+// New sets up metrics and traces as cfg and the environment say. With
+// neither, it returns a Telemetry whose providers record nothing.
 //
-// Call Shutdown when the command stops, so that the last metrics are
-// exported.
+// Call Shutdown when the command stops, so that the last metrics and spans
+// are exported.
 func New(ctx context.Context, cfg Config) (*Telemetry, error) {
 	getenv := cfg.Getenv
 	if getenv == nil {
@@ -104,9 +118,9 @@ func New(ctx context.Context, cfg Config) (*Telemetry, error) {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	t := &Telemetry{
-		meterProvider: noop.NewMeterProvider(),
-		shutdown:      func(context.Context) error { return nil },
-		logger:        logger,
+		meterProvider:  noop.NewMeterProvider(),
+		tracerProvider: tracenoop.NewTracerProvider(),
+		logger:         logger,
 	}
 
 	push, err := pushEnabled(getenv)
@@ -140,10 +154,41 @@ func New(ctx context.Context, cfg Config) (*Telemetry, error) {
 			ErrorHandling: promhttp.ContinueOnError,
 		})
 	}
-	if len(readers) == 0 {
+	spanExporter := cfg.SpanExporter
+	batch := false
+	if spanExporter == nil && tracesEnabled(getenv) {
+		exp, err := autoexport.NewSpanExporter(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("configure the OTLP trace exporter: %w", err)
+		}
+		if !autoexport.IsNoneSpanExporter(exp) {
+			spanExporter, batch = exp, true
+		}
+	}
+	if len(readers) == 0 && spanExporter == nil {
 		return t, nil
 	}
 
+	res, err := newResource(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if len(readers) > 0 {
+		mp := NewMeterProvider(res, readers...)
+		t.meterProvider = mp
+		t.shutdown = append(t.shutdown, mp.Shutdown)
+	}
+	if spanExporter != nil {
+		tp := NewTracerProvider(res, spanExporter, batch)
+		t.tracerProvider = tp
+		t.tracing = true
+		t.shutdown = append(t.shutdown, tp.Shutdown)
+	}
+	return t, nil
+}
+
+// newResource returns the resource that describes the command.
+func newResource(ctx context.Context, cfg Config) (*resource.Resource, error) {
 	res, err := resource.Merge(resource.Default(), resource.NewSchemaless(
 		semconv.ServiceName(ServiceName),
 		semconv.ServiceVersion(cfg.Version),
@@ -158,10 +203,7 @@ func New(ctx context.Context, cfg Config) (*Telemetry, error) {
 			res = merged
 		}
 	}
-	mp := NewMeterProvider(res, readers...)
-	t.meterProvider = mp
-	t.shutdown = mp.Shutdown
-	return t, nil
+	return res, nil
 }
 
 // pushEnabled reports whether the environment asks for metrics to be
@@ -200,10 +242,14 @@ func (t *Telemetry) TemporalMetricsHandler() client.MetricsHandler {
 	return TemporalMetricsHandler(t.meterProvider, t.logger)
 }
 
-// Shutdown exports the metrics not yet exported and stops the exporters.
-// It returns when ctx ends, whether or not they are done.
+// Shutdown exports the metrics and spans not yet exported and stops the
+// exporters. It returns when ctx ends, whether or not they are done.
 func (t *Telemetry) Shutdown(ctx context.Context) error {
-	return t.shutdown(ctx)
+	var errs []error
+	for _, shutdown := range t.shutdown {
+		errs = append(errs, shutdown(ctx))
+	}
+	return errors.Join(errs...)
 }
 
 // TemporalMetricsHandler returns a Temporal SDK metrics handler that
