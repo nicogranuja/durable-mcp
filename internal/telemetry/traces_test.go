@@ -141,12 +141,12 @@ func TestHTTPInstrumentation(t *testing.T) {
 	t.Cleanup(func() { _ = tel.Shutdown(context.Background()) })
 
 	var gotTraceparent string
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		gotTraceparent = r.Header.Get("Traceparent")
 	}))
 	t.Cleanup(backend.Close)
 	hc := &http.Client{Transport: tel.HTTPTransport(nil)}
-	front := httptest.NewServer(tel.HTTPHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	front := httptest.NewServer(tel.HTTPHandler(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, backend.URL, nil)
 		if resp, err := hc.Do(req); err == nil {
 			resp.Body.Close()
@@ -184,12 +184,12 @@ func assertNoCanary(t *testing.T, s tracetest.SpanStub, canary string) {
 	check("name", s.Name)
 	check("status", s.Status.Description)
 	for _, kv := range s.Attributes {
-		check(string(kv.Key), kv.Value.Emit())
+		check(string(kv.Key), kv.Value.String())
 	}
 	for _, e := range s.Events {
 		check("event", e.Name)
 		for _, kv := range e.Attributes {
-			check("event "+string(kv.Key), kv.Value.Emit())
+			check("event "+string(kv.Key), kv.Value.String())
 		}
 	}
 }
