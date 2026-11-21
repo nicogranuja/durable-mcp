@@ -292,13 +292,13 @@ off) or an OTLP endpoint is (`OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTL
 `OTEL_TRACES_SAMPLER` changes it. A trace follows a job from the agent's request to GitHub:
 
 ```text
-POST /mcp                                      serve, otelhttp (401s too, outside auth)
-└─ tools/call start_report                     serve, one span per MCP request
-   └─ StartWorkflow:RepositoryReport           serve, Temporal tracing interceptor
-      └─ RunWorkflow:RepositoryReport          worker
-         └─ StartActivity:report.FetchIssuesPage worker
-            └─ RunActivity:report.FetchIssuesPage worker
-               └─ GET                          worker, otelhttp on the GitHub client
+POST /mcp                                       serve, otelhttp (401s too, outside auth)
+└─ tools/call start_report                      serve, one span per MCP request
+   └─ StartWorkflow:RepositoryReport            serve, Temporal tracing interceptor
+      └─ RunWorkflow:RepositoryReport           worker
+         └─ StartActivity:report.FetchIssuesPage   worker
+            └─ RunActivity:report.FetchIssuesPage  worker
+               └─ GET                           worker, otelhttp on the GitHub client
 ```
 
 Tool call spans follow the MCP semantic conventions (`mcp.method.name`, `gen_ai.tool.name`,
@@ -309,7 +309,8 @@ GitHub client sends no trace context to GitHub.
 No span records a credential. The instrumentation captures no headers, and every span then passes through a policy
 before export: header attributes are dropped, `url.full` and `url.query` keep only the values of known GitHub query
 parameters (`page`, `per_page`, `state`, …; any other value becomes `REDACTED`), and bearer and token-shaped strings
-in any other text, such as an error message that quotes a URL, are redacted. A test sends a canary token through an
+in any other text, such as an error message that quotes a URL, are redacted. String attributes are capped at 1 KiB
+unless `OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT` says otherwise. A test sends a canary token through an
 authenticated request, a rejected one, and the GitHub client, and checks it is in no span.
 
 A Grafana dashboard for these metrics comes next, in `deploy/grafana/`.
