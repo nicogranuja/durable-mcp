@@ -29,10 +29,21 @@ func NewMeterProvider(res *resource.Resource, readers ...metric.Reader) *metric.
 	return metric.NewMeterProvider(opts...)
 }
 
+// serverAttributesDenied are the attributes otelhttp puts on its server
+// metrics that the client controls: it takes them from the Host header,
+// before auth, so a client without a token could otherwise create a time
+// series per name it sends.
+var serverAttributesDenied = []attribute.Key{"server.address", "server.port"}
+
 // views set bucket boundaries for the histograms recorded through the
-// Temporal SDK's metrics handler, which cannot pass bucket advice.
+// Temporal SDK's metrics handler, which cannot pass bucket advice, and keep
+// the attributes the client controls off the HTTP server metrics.
 func views() []metric.View {
 	return []metric.View{
+		metric.NewView(
+			metric.Instrument{Name: "http.server.*"},
+			metric.Stream{AttributeFilter: attribute.NewDenyKeysFilter(serverAttributesDenied...)},
+		),
 		metric.NewView(
 			metric.Instrument{Name: temporalHistogramFilter, Kind: metric.InstrumentKindHistogram},
 			metric.Stream{Aggregation: metric.AggregationExplicitBucketHistogram{Boundaries: temporalBuckets}},

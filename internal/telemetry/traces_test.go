@@ -9,6 +9,9 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
@@ -195,5 +198,56 @@ func assertNoCanary(t *testing.T, s tracetest.SpanStub, canary string) {
 		for _, kv := range e.Attributes {
 			check("event "+string(kv.Key), kv.Value.String())
 		}
+	}
+}
+
+// The HTTP server metrics keep no attribute the client sets through the
+// Host header, which would give each made-up host its own time series.
+func TestHTTPServerMetricsIgnoreHost(t *testing.T) {
+	t.Parallel()
+
+	r := sdkmetric.NewManualReader()
+	mp := NewMeterProvider(resource.Empty(), r)
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	tel := &Telemetry{meterProvider: mp, tracerProvider: tracenoop.NewTracerProvider()}
+	srv := httptest.NewServer(tel.HTTPHandler(http.NotFoundHandler(), "/mcp"))
+	t.Cleanup(srv.Close)
+
+	for _, host := range []string{"a.example", "b.example:1234"} {
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/mcp", nil)
+		req.Host = host
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+
+	var rm metricdata.ResourceMetrics
+	if err := r.Collect(t.Context(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "http.server.request.duration" {
+				continue
+			}
+			found = true
+			points := m.Data.(metricdata.Histogram[float64]).DataPoints
+			if len(points) != 1 {
+				t.Errorf("%s has %d series for two hosts, want 1", m.Name, len(points))
+			}
+			for _, p := range points {
+				for _, k := range serverAttributesDenied {
+					if v, ok := p.Attributes.Value(k); ok {
+						t.Errorf("%s has %s=%q", m.Name, k, v.Emit())
+					}
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("http.server.request.duration was not recorded")
 	}
 }
