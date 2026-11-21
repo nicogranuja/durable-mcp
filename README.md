@@ -253,8 +253,8 @@ The MCP tools only accept job IDs that `start_report` issues, so they will not s
 
 ## Observability
 
-Both commands record OpenTelemetry metrics, the Temporal SDK's own included. Telemetry is off by default: a plain run
-makes no network calls and opens no extra port. Turn it on either or both ways:
+Both commands record OpenTelemetry metrics, the Temporal SDK's own included, and traces. Telemetry is off by default: a
+plain run makes no network calls and opens no extra port. Turn metrics on either or both ways:
 
 - **Prometheus (pull):** `-metrics-addr host:port` (env `DURABLE_MCP_METRICS_ADDR`) serves `/metrics` from a private
   registry. A bare `:9464` listens on `127.0.0.1`; name the host, such as `0.0.0.0:9464`, to listen beyond loopback.
@@ -265,7 +265,7 @@ makes no network calls and opens no extra port. Turn it on either or both ways:
   `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`). `OTEL_METRICS_EXPORTER=none` turns it off; `prometheus` is
   rejected in favor of `-metrics-addr`.
 
-On stop, each command exports its last metrics, for up to 5 seconds. Metrics carry `service.name=durable-mcp` and
+On stop, each command exports its last metrics and spans, for up to 5 seconds. Metrics carry `service.name=durable-mcp` and
 `durable_mcp.component=serve` or `worker`.
 
 | Metric (Prometheus name) | Type | Attributes | Recorded by |
@@ -275,6 +275,8 @@ On stop, each command exports its last metrics, for up to 5 seconds. Metrics car
 | `durable_mcp.jobs.finished` (`durable_mcp_jobs_finished_total`) | counter | `durable_mcp.job.outcome` (`completed`, `failed`, `canceled`), `error.type` | worker (workflow) |
 | `durable_mcp.activity.attempts` (`durable_mcp_activity_attempts_total`) | counter | `durable_mcp.activity.name`, `durable_mcp.activity.retry`, `error.type` | worker |
 | `durable_mcp.github.rate_limit.wait.duration` (`durable_mcp_github_rate_limit_wait_duration_seconds`) | histogram, s | `durable_mcp.github.rate_limit.kind` (`primary`, `secondary`) | worker |
+| `http.server.request.duration` (`http_server_request_duration_seconds`) | histogram, s | otelhttp's: `http.request.method`, `http.response.status_code`, `url.scheme`; 401s included | serve |
+| `http.client.request.duration` (`http_client_request_duration_seconds`) | histogram, s | otelhttp's: `http.request.method`, `http.response.status_code`, `server.address` | worker (GitHub) |
 | `temporal_*` | Temporal SDK | the SDK's own, such as `namespace`, `task_queue`, `workflow_type`, `activity_type` | both |
 
 Every attribute value comes from a fixed set, so the number of time series does not grow with use: method and tool
@@ -282,7 +284,35 @@ names the server does not know become `_OTHER`, and no metric is labeled with a 
 belong in logs and in Temporal. The workflow's metric skips replays, and is recorded after the workflow returns, so a
 job is counted once. Activity attempts count the retries that Temporal keeps out of workflow history.
 
-A Grafana dashboard for these metrics comes next (Day 9 of the roadmap), in `deploy/grafana/`. Traces are not exported yet.
+### Traces
+
+Traces are exported over OTLP when `OTEL_TRACES_EXPORTER` is set (`otlp`, or `console` for stdout; `none` turns them
+off) or an OTLP endpoint is (`OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`), so one
+`OTEL_EXPORTER_OTLP_ENDPOINT` turns on metrics and traces together. The sampler is the SDK's (parent-based, always on);
+`OTEL_TRACES_SAMPLER` changes it. A trace follows a job from the agent's request to GitHub:
+
+```text
+POST /mcp                                      serve, otelhttp (401s too, outside auth)
+└─ tools/call start_report                     serve, one span per MCP request
+   └─ StartWorkflow:RepositoryReport           serve, Temporal tracing interceptor
+      └─ RunWorkflow:RepositoryReport          worker
+         └─ StartActivity:report.FetchIssuesPage worker
+            └─ RunActivity:report.FetchIssuesPage worker
+               └─ GET                          worker, otelhttp on the GitHub client
+```
+
+Tool call spans follow the MCP semantic conventions (`mcp.method.name`, `gen_ai.tool.name`,
+`gen_ai.operation.name=execute_tool`, `error.type`) with the metric's bounded values, and record no arguments,
+results, or error messages. The server continues a W3C `traceparent` a client sends, but takes no baggage from it; the
+GitHub client sends no trace context to GitHub.
+
+No span records a credential. The instrumentation captures no headers, and every span then passes through a policy
+before export: header attributes are dropped, `url.full` and `url.query` keep only the values of known GitHub query
+parameters (`page`, `per_page`, `state`, …; any other value becomes `REDACTED`), and bearer and token-shaped strings
+in any other text, such as an error message that quotes a URL, are redacted. A test sends a canary token through an
+authenticated request, a rejected one, and the GitHub client, and checks it is in no span.
+
+A Grafana dashboard for these metrics comes next, in `deploy/grafana/`.
 
 ## Running the tests
 
