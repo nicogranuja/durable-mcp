@@ -76,11 +76,14 @@ func startTelemetry(ctx context.Context, component string, cfg metricsConfig, lo
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), telemetryShutdownTimeout)
 		defer cancel()
 		if err := tel.Shutdown(shutdownCtx); err != nil {
-			logger.Warn("Could not export the last metrics", "Error", err)
+			logger.Warn("Could not export the last metrics and spans", "Error", err)
 		}
 	}
 	if tel.Pushing() {
 		logger.Info("Exporting metrics over OTLP, as the OTEL_* environment variables configure")
+	}
+	if tel.Tracing() {
+		logger.Info("Exporting traces, as the OTEL_* environment variables configure")
 	}
 	if cfg.addr == "" {
 		return tel, shutdown, nil

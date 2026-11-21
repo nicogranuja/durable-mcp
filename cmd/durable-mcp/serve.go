@@ -19,6 +19,7 @@ import (
 
 	"github.com/nicogranuja/durable-mcp/internal/auth"
 	"github.com/nicogranuja/durable-mcp/internal/mcpserver"
+	"github.com/nicogranuja/durable-mcp/internal/telemetry"
 )
 
 // Transports that serve can use.
@@ -279,6 +280,12 @@ func serveMCP(ctx context.Context, cfg serveConfig, stdin io.ReadCloser, stdout 
 	// until it closes.
 	defer stopTelemetry()
 
+	// With traces on, the tracing interceptor carries each tool call's
+	// trace into the workflow it starts.
+	interceptors, err := tel.TemporalInterceptors()
+	if err != nil {
+		return fmt.Errorf("configure Temporal tracing: %w", err)
+	}
 	// A lazy client connects on first use, so the server starts, and lists
 	// its tools, even while Temporal is down; the tools then say that
 	// Temporal is unreachable, and work once it is back.
@@ -287,6 +294,7 @@ func serveMCP(ctx context.Context, cfg serveConfig, stdin io.ReadCloser, stdout 
 		Namespace:      cfg.temporal.namespace,
 		Logger:         log.NewStructuredLogger(logger),
 		MetricsHandler: tel.TemporalMetricsHandler(),
+		Interceptors:   interceptors,
 	})
 	if err != nil {
 		return fmt.Errorf("configure the Temporal client for %s: %w", cfg.temporal.address, err)
@@ -300,15 +308,16 @@ func serveMCP(ctx context.Context, cfg serveConfig, stdin io.ReadCloser, stdout 
 	cancel()
 
 	server := mcpserver.New(c, mcpserver.Options{
-		TaskQueue:     cfg.temporal.taskQueue,
-		Version:       version,
-		Logger:        logger,
-		ToolTimeout:   cfg.toolTimeout,
-		MeterProvider: tel.MeterProvider(),
+		TaskQueue:      cfg.temporal.taskQueue,
+		Version:        version,
+		Logger:         logger,
+		ToolTimeout:    cfg.toolTimeout,
+		MeterProvider:  tel.MeterProvider(),
+		TracerProvider: tel.TracerProvider(),
 	})
 	logAuth(cfg, logger)
 	if cfg.transport == transportHTTP {
-		return serveHTTP(ctx, server, cfg.httpAddr, cfg.tokens, logger)
+		return serveHTTP(ctx, server, cfg.httpAddr, cfg.tokens, tel, logger)
 	}
 	logger.Info("Serving MCP over stdio", "TaskQueue", cfg.temporal.taskQueue)
 	err = server.Run(ctx, &mcp.IOTransport{Reader: stdin, Writer: nopWriteCloser{stdout}})
@@ -342,12 +351,12 @@ type nopWriteCloser struct{ io.Writer }
 func (nopWriteCloser) Close() error { return nil }
 
 // serveHTTP serves server over streamable HTTP until ctx is canceled.
-func serveHTTP(ctx context.Context, server *mcp.Server, addr string, tokens *auth.Tokens, logger *slog.Logger) error {
+func serveHTTP(ctx context.Context, server *mcp.Server, addr string, tokens *auth.Tokens, tel *telemetry.Telemetry, logger *slog.Logger) error {
 	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}
-	srv := newHTTPServer(httpHandler(server, tokens, logger), logger)
+	srv := newHTTPServer(httpHandler(server, tokens, tel, logger), logger)
 	logger.Info("Serving MCP over streamable HTTP", "URL", "http://"+ln.Addr().String()+mcpPath)
 	return serveUntilDone(ctx, srv, ln, httpShutdownTimeout)
 }
@@ -410,12 +419,15 @@ func newHTTPServer(h http.Handler, logger *slog.Logger) *http.Server {
 // name the attacker controls, resolved to 127.0.0.1, would otherwise be
 // same-origin to the browser).
 //
+// With tel, otelhttp wraps all of that, so that every request, a 401 or a
+// 403 included, gets a span and counts in http.server.request.duration.
+//
 // With tokens, the Host check is off. It is not needed: a rebinding page
 // cannot present a bearer token it does not have, so its requests get 401
 // whatever the Host. And it gets in the way: a TLS proxy on the same host
 // that forwards to 127.0.0.1 and keeps the public Host header, as most do
 // by default, would get 403 for every request.
-func httpHandler(server *mcp.Server, tokens *auth.Tokens, logger *slog.Logger) http.Handler {
+func httpHandler(server *mcp.Server, tokens *auth.Tokens, tel *telemetry.Telemetry, logger *slog.Logger) http.Handler {
 	var h http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
 		&mcp.StreamableHTTPOptions{
 			Stateless:                  true,
@@ -426,7 +438,11 @@ func httpHandler(server *mcp.Server, tokens *auth.Tokens, logger *slog.Logger) h
 	if tokens != nil {
 		h = auth.Middleware(tokens, logger, h)
 	}
+	h = http.NewCrossOriginProtection().Handler(h)
+	if tel != nil {
+		h = tel.HTTPHandler(h, mcpPath)
+	}
 	mux := http.NewServeMux()
-	mux.Handle(mcpPath, http.NewCrossOriginProtection().Handler(h))
+	mux.Handle(mcpPath, h)
 	return mux
 }

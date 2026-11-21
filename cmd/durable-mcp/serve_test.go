@@ -377,7 +377,7 @@ type noTemporal struct{ mcpserver.Client }
 func TestHTTPHandler(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(httpHandler(mcpserver.New(noTemporal{}, mcpserver.Options{}), nil, discardLogger()))
+	srv := httptest.NewServer(httpHandler(mcpserver.New(noTemporal{}, mcpserver.Options{}), nil, nil, discardLogger()))
 	t.Cleanup(srv.Close)
 
 	t.Run("streamable HTTP client", func(t *testing.T) {
@@ -456,7 +456,7 @@ func TestServeHTTPStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- serveHTTP(ctx, mcpserver.New(noTemporal{}, mcpserver.Options{}), "127.0.0.1:0", nil, discardLogger())
+		done <- serveHTTP(ctx, mcpserver.New(noTemporal{}, mcpserver.Options{}), "127.0.0.1:0", nil, nil, discardLogger())
 	}()
 	cancel()
 	select {
@@ -497,7 +497,7 @@ func TestHTTPHandlerAuth(t *testing.T) {
 		return nil, whoamiOut{Caller: c.Name}, nil
 	})
 	var logs syncBuffer
-	srv := httptest.NewServer(httpHandler(server, tokens, slog.New(slog.NewTextHandler(&logs, nil))))
+	srv := httptest.NewServer(httpHandler(server, tokens, nil, slog.New(slog.NewTextHandler(&logs, nil))))
 	t.Cleanup(srv.Close)
 
 	initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"x","version":"1"}}}`

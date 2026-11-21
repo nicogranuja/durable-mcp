@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"go.temporal.io/sdk/client"
@@ -110,7 +111,16 @@ func runWorker(ctx context.Context, args []string, getenv func(string) string, s
 // serveWorker connects to Temporal and runs a worker for the report
 // workflow and activities until ctx is canceled.
 func serveWorker(ctx context.Context, cfg workerConfig, logger *slog.Logger) error {
-	gh, err := github.New(cfg.githubToken, github.WithBaseURL(cfg.githubAPIURL))
+	tel, stopTelemetry, err := startTelemetry(ctx, "worker", cfg.metrics, logger)
+	if err != nil {
+		return err
+	}
+	// Deferred before the client closes, so it runs after: the worker's
+	// last metrics and spans are exported once it has stopped.
+	defer stopTelemetry()
+
+	gh, err := github.New(cfg.githubToken, github.WithBaseURL(cfg.githubAPIURL),
+		github.WithHTTPClient(&http.Client{Transport: tel.HTTPTransport(nil)}))
 	if err != nil {
 		return err
 	}
@@ -118,19 +128,19 @@ func serveWorker(ctx context.Context, cfg workerConfig, logger *slog.Logger) err
 		logger.Warn("GITHUB_TOKEN is not set: GitHub allows 60 unauthenticated requests per hour, for public repositories only")
 	}
 
-	tel, stopTelemetry, err := startTelemetry(ctx, "worker", cfg.metrics, logger)
+	// With traces on, the tracing interceptor, set on the client, applies to
+	// the worker too: workflow and activity spans continue the trace of the
+	// tool call that started the job.
+	interceptors, err := tel.TemporalInterceptors()
 	if err != nil {
-		return err
+		return fmt.Errorf("configure Temporal tracing: %w", err)
 	}
-	// Deferred before the client closes, so it runs after: the worker's
-	// last metrics are exported once it has stopped.
-	defer stopTelemetry()
-
 	c, err := client.DialContext(ctx, client.Options{
 		HostPort:       cfg.temporal.address,
 		Namespace:      cfg.temporal.namespace,
 		Logger:         log.NewStructuredLogger(logger),
 		MetricsHandler: tel.TemporalMetricsHandler(),
+		Interceptors:   interceptors,
 	})
 	if err != nil {
 		return fmt.Errorf("connect to Temporal at %s: %w", cfg.temporal.address, err)
