@@ -19,6 +19,12 @@ const (
 	envTracesExporter     = "OTEL_TRACES_EXPORTER"
 	envOTLPTracesEndpoint = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
 	temporalTracerScope   = "go.temporal.io/sdk"
+
+	// maxAttributeLength caps a span attribute's string value, unless
+	// OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT sets a cap. The SDK's default
+	// is none, and some values come from clients: a User-Agent header can
+	// be as long as the server's header limit.
+	maxAttributeLength = 1024
 )
 
 // tracesEnabled reports whether the environment asks for traces to be
@@ -40,14 +46,19 @@ func tracesEnabled(getenv func(string) string) bool {
 // exported as it ends, for tests.
 //
 // The sampler is the SDK's: parent-based, always on, unless
-// OTEL_TRACES_SAMPLER says otherwise.
+// OTEL_TRACES_SAMPLER says otherwise. String attributes are capped at
+// maxAttributeLength.
 func NewTracerProvider(res *resource.Resource, exp sdktrace.SpanExporter, batch bool) *sdktrace.TracerProvider {
 	exp = redactingExporter{next: exp}
 	process := sdktrace.WithSyncer(exp)
 	if batch {
 		process = sdktrace.WithBatcher(exp)
 	}
-	return sdktrace.NewTracerProvider(sdktrace.WithResource(res), process)
+	limits := sdktrace.NewSpanLimits() // from the OTEL_* variables
+	if limits.AttributeValueLengthLimit < 0 {
+		limits.AttributeValueLengthLimit = maxAttributeLength
+	}
+	return sdktrace.NewTracerProvider(sdktrace.WithResource(res), sdktrace.WithRawSpanLimits(limits), process)
 }
 
 // TracerProvider returns the tracer provider to create spans with. It

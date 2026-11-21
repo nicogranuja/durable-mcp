@@ -96,6 +96,7 @@ func TestSpanPolicy(t *testing.T) {
 			attribute.StringSlice("http.request.header.x-api-key", []string{canary}),
 			attribute.StringSlice("notes", []string{"token " + canary}),
 			attribute.Int("http.response.status_code", 401),
+			attribute.String("user_agent.original", strings.Repeat("x", 4*maxAttributeLength)),
 		))
 	span.AddEvent("exception", trace.WithAttributes(attribute.String("exception.message",
 		`Get "https://api.github.com/x?client_secret=`+canary+`": context deadline exceeded`)))
@@ -121,6 +122,9 @@ func TestSpanPolicy(t *testing.T) {
 		if _, ok := attrs[k]; ok {
 			t.Errorf("attribute %s was kept, want it dropped", k)
 		}
+	}
+	if got := len(attrs["user_agent.original"].AsString()); got != maxAttributeLength {
+		t.Errorf("a long attribute has %d bytes, want it capped at %d", got, maxAttributeLength)
 	}
 	if got := attrs["http.response.status_code"].AsInt64(); got != 401 {
 		t.Errorf("status code = %d, want it kept", got)
