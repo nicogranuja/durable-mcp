@@ -347,9 +347,10 @@ No test needs a Temporal server, a GitHub token, or the network:
 
 - The GitHub client tests run against local `httptest` servers.
 - The workflow tests use the Temporal SDK's test environment, which skips ahead through timers and retry delays, so a
-  half-hour rate-limit wait takes milliseconds. A replay test runs the workflow against a
-  [history](internal/report/testdata/repository_report_history.json) recorded from a real run, to catch changes that
-  would break running workflows.
+  half-hour rate-limit wait takes milliseconds. A replay test runs the workflow against histories recorded from
+  real runs, [one](internal/report/testdata/repository_report_history.json) from before the activities took their
+  `report.*` names and [one](internal/report/testdata/repository_report_history_prefixed.json) after, to catch
+  changes that would break running workflows.
 - The MCP tool tests use a fake Temporal client, and protocol tests connect a real MCP client to the server over the
   SDK's in-memory transport, list the tools, check their schemas, and call each one. The command tests run the server
   over stdio pipes and streamable HTTP.
