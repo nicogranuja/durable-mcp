@@ -19,7 +19,7 @@ requests, and commit activity, fetched through the GitHub REST API with paginati
       stdio and streamable HTTP, with a "use it from Claude Code" guide.
 - [x] **Hardening:** idempotent starts, timeouts and cancellation end to end, input validation, an error taxonomy
       agents can act on, OpenTelemetry metrics and traces, a Grafana dashboard, and bearer-token auth.
-- [ ] **Docs and release:** architecture and design notes, an operations runbook, a Dockerfile, and v0.1.0.
+- [ ] **Docs and release:** architecture and design notes, an operations runbook, a Dockerfile (done), and v0.1.0.
 
 ## Layout
 
@@ -30,6 +30,8 @@ internal/report/      the repository report as a Temporal workflow and activitie
 internal/github/      GitHub REST API client
 internal/telemetry/   OpenTelemetry metrics setup: OTLP, Prometheus, and the Temporal SDK handler
 deploy/grafana/       Grafana dashboard for the Prometheus metrics
+deploy/compose/       Docker Compose example for trying it out locally
+Dockerfile            the container image, for both roles
 ```
 
 The design notes live in package documentation: the [MCP tools](internal/mcpserver/doc.go), including job IDs and
@@ -184,6 +186,67 @@ same machine may forward to `127.0.0.1` with the public `Host` header.
 > [!WARNING]
 > The transport is plain HTTP, so tokens travel unencrypted, and the server logs a warning when it listens beyond
 > loopback. Beyond a single machine, put it behind a TLS-terminating proxy or keep it on a private network.
+
+## Run in a container
+
+The [`Dockerfile`](Dockerfile) builds one small image for both roles: a static binary on
+[distroless](https://github.com/GoogleContainerTools/distroless) `static`, with CA certificates and no shell, running as
+the unprivileged user 65532. The command picks the role, since `serve` and `worker` are subcommands. CI builds the
+image on every push (it is not published) and runs the checks below.
+
+```sh
+docker build -t durable-mcp \
+  --build-arg VERSION="$(git describe --tags --always)" --build-arg REVISION="$(git rev-parse HEAD)" .
+docker run --rm durable-mcp -version
+```
+
+Run the worker. Inside a container, `localhost` is the container itself, so point it at your Temporal server:
+
+```sh
+docker run -d --name durable-mcp-worker -e TEMPORAL_ADDRESS=temporal.internal:7233 -e GITHUB_TOKEN \
+  durable-mcp worker -metrics-addr 0.0.0.0:9464
+```
+
+`-e GITHUB_TOKEN` passes the variable from your shell without writing the token on the command line (it still shows in
+`docker inspect`; on Kubernetes, take it from a Secret). To reach `serve`
+from outside its container, it has to listen on a non-loopback address such as `0.0.0.0:8080`, and that needs auth
+tokens. Mount the tokens file (it holds only hashes, so a read-only mount readable by user 65532 is fine, such as a
+Docker or Kubernetes secret) and point `-auth-tokens-file` at it:
+
+```sh
+docker run -d --name durable-mcp-serve -e TEMPORAL_ADDRESS=temporal.internal:7233 \
+  -v /path/to/tokens:/run/secrets/durable-mcp-tokens:ro -p 8080:8080 -p 127.0.0.1:9464:9464 \
+  durable-mcp serve -transport http -http-addr 0.0.0.0:8080 \
+  -auth-tokens-file /run/secrets/durable-mcp-tokens -metrics-addr 0.0.0.0:9464
+```
+
+`-metrics-addr` also needs an explicit host in a container: a bare `:9464` means the container's own loopback, which a
+Prometheus outside it cannot scrape. `/metrics` has no authentication, so publish it only where your Prometheus can
+reach it and nothing else can, as the `127.0.0.1:` above does on a single host; the same goes for the plain-HTTP
+caveat in [Authentication](#authentication), which holds inside a container too.
+
+Both roles stop gracefully on SIGTERM. Give the container at least 70 seconds, so a stopping worker gets its full
+minute (see [Timeouts](#timeouts)): `docker stop -t 70 durable-mcp-worker`, `stop_grace_period: 70s` in Compose, or
+`terminationGracePeriodSeconds: 70` in a Kubernetes pod spec. Neither role has a health endpoint yet; until then, a TCP
+check on the `serve` port tells a load balancer the process is up, and the logs say whether Temporal is reachable.
+
+### Trying it out with Docker Compose
+
+[`deploy/compose/compose.yaml`](deploy/compose/compose.yaml) runs a Temporal development server, the worker, and `serve`
+on one machine, for trying it out only: the development server keeps everything in memory and has no authentication.
+Every port it publishes is on `127.0.0.1`. It needs a tokens file, from a path you choose:
+
+```sh
+docker run --rm durable-mcp token alice    # keep the token: line; the entry: line goes in the file
+echo 'alice:...' > /path/to/tokens && chmod 644 /path/to/tokens
+export DURABLE_MCP_TOKENS_FILE=/path/to/tokens
+docker compose -f deploy/compose/compose.yaml up --build
+```
+
+Then `http://127.0.0.1:8080/mcp` takes the token (see [Use it from Claude Code](#use-it-from-claude-code)), the Temporal
+web UI is at http://localhost:8233, and `/metrics` is on ports 9464 (serve) and 9465 (worker). Set `GITHUB_TOKEN` in
+the shell first to give the worker a GitHub token. `docker compose -f deploy/compose/compose.yaml down` stops it all
+and forgets every job.
 
 ## Use it from Claude Code
 
