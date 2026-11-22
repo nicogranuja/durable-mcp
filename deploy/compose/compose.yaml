@@ -1,0 +1,67 @@
+# For trying durable-mcp out on one machine only: a Temporal development
+# server (in-memory, no auth, no TLS), the worker, and the MCP server over
+# HTTP with bearer tokens. Not a production setup.
+#
+#   docker run --rm durable-mcp token alice    # or: bin/durable-mcp token alice
+#   # put the entry: line in a file readable by UID 65532 (it holds only hashes)
+#   export DURABLE_MCP_TOKENS_FILE=/path/to/tokens
+#   docker compose -f deploy/compose/compose.yaml up --build
+#
+# Every published port listens on the host's loopback only.
+name: durable-mcp
+
+# Both roles run the same image, built from the repository root.
+x-durable-mcp: &durable-mcp
+  build: ../..
+  image: durable-mcp:local
+  # The worker's stop timeout is 1m; give it that and some margin.
+  stop_grace_period: 70s
+
+services:
+  temporal:
+    image: temporalio/temporal:1.10.1
+    command: ["server", "start-dev", "--ip", "0.0.0.0"]
+    ports:
+      - "127.0.0.1:7233:7233" # Temporal frontend, for the temporal CLI
+      - "127.0.0.1:8233:8233" # web UI
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "127.0.0.1:7233"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  worker:
+    <<: *durable-mcp
+    command: ["worker", "-metrics-addr", "0.0.0.0:9464"]
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      # Optional; without it GitHub allows 60 requests an hour. Taken from
+      # the shell that runs docker compose, never written here.
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    ports:
+      - "127.0.0.1:9465:9464" # /metrics, unauthenticated
+    depends_on:
+      temporal:
+        condition: service_healthy
+
+  serve:
+    <<: *durable-mcp
+    command:
+      - serve
+      - -transport=http
+      - -http-addr=0.0.0.0:8080
+      - -auth-tokens-file=/run/secrets/durable-mcp-tokens
+      - -metrics-addr=0.0.0.0:9464
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    secrets:
+      - durable-mcp-tokens
+    ports:
+      - "127.0.0.1:8080:8080" # http://127.0.0.1:8080/mcp, bearer tokens required
+      - "127.0.0.1:9464:9464" # /metrics, unauthenticated
+    depends_on:
+      - temporal
+
+secrets:
+  durable-mcp-tokens:
+    file: ${DURABLE_MCP_TOKENS_FILE:?set DURABLE_MCP_TOKENS_FILE to the path of a tokens file}
