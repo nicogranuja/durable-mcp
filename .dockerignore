@@ -1,0 +1,10 @@
+# Send the build only what it compiles: go.mod, go.sum, cmd/, internal/.
+# Ignoring everything else also keeps local secrets out of the build context.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+# Test fixtures and tests are not part of the binary.
+**/*_test.go
+**/testdata/
