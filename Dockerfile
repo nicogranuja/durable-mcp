@@ -51,10 +51,11 @@ COPY --from=build /out/durable-mcp /usr/local/bin/durable-mcp
 # check it without reading /etc/passwd.
 USER 65532:65532
 
-# Ports the README's examples use: the MCP HTTP transport and -metrics-addr.
-# Neither listens by default, and neither listens beyond loopback unless told
-# to; the HTTP transport refuses to without auth tokens.
-EXPOSE 8080 9464
+# The MCP HTTP transport, in the README's examples. It listens beyond
+# loopback only with auth tokens. -metrics-addr's port is left out on
+# purpose: /metrics has no authentication, so "docker run -P" should not
+# publish it.
+EXPOSE 8080
 
 # SIGTERM starts a graceful stop. The worker takes up to a minute, so stop
 # the container with a grace period of at least 70 seconds
