@@ -78,3 +78,90 @@ jobs:
           repo-checkout: false
           go-version-input: stable
           cache-dependency-path: go.mod
+
+  # Builds the container image (never pushed) and checks it the way the README
+  # runs it. Docker is not needed anywhere else, so this is where the image is
+  # proven.
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      IMAGE: durable-mcp:ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Dockerfile's Go version matches go.mod
+        run: |
+          mod=$(sed -n 's/^go \([0-9]*\.[0-9]*\).*/\1/p' go.mod)
+          img=$(sed -n 's/^ARG GO_VERSION=//p' Dockerfile)
+          echo "go.mod: $mod, Dockerfile: $img"
+          test -n "$mod" && test "$mod" = "$img"
+      - name: docker build
+        run: docker build --build-arg VERSION=ci --build-arg REVISION="$GITHUB_SHA" -t "$IMAGE" .
+      - name: Smoke test
+        run: |
+          docker run --rm "$IMAGE" --help
+          out=$(docker run --rm "$IMAGE" -version)
+          echo "$out"
+          test "$out" = "durable-mcp ci (commit $GITHUB_SHA)"
+          test "$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")" = "$GITHUB_SHA"
+      - name: Runs as a non-root user
+        run: |
+          user=$(docker inspect --format '{{.Config.User}}' "$IMAGE")
+          echo "image user: $user"
+          test "$user" = "65532:65532"
+      - name: serve refuses a non-loopback address without tokens
+        run: |
+          code=0
+          docker run --rm "$IMAGE" serve -transport http -http-addr 0.0.0.0:8080 2> err.txt || code=$?
+          cat err.txt
+          test "$code" -eq 2
+          grep -q 'is not a loopback address' err.txt
+      - name: serve with a mounted tokens file, /metrics, and a graceful stop
+        run: |
+          docker run --rm "$IMAGE" token ci > minted.txt
+          token=$(sed -n 's/^token: //p' minted.txt)
+          sed -n 's/^entry: //p' minted.txt > "$RUNNER_TEMP/tokens"
+          rm minted.txt
+          docker run -d --name serve \
+            -v "$RUNNER_TEMP/tokens:/run/secrets/durable-mcp-tokens:ro" \
+            -p 127.0.0.1:8080:8080 -p 127.0.0.1:9464:9464 \
+            "$IMAGE" serve -transport http -http-addr 0.0.0.0:8080 \
+            -auth-tokens-file /run/secrets/durable-mcp-tokens -metrics-addr 0.0.0.0:9464
+          for _ in $(seq 30); do
+            curl -s -o /dev/null http://127.0.0.1:8080/mcp && break
+            sleep 1
+          done
+          body='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}'
+          post() {
+            curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/mcp "$@" \
+              -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d "$body"
+          }
+          test "$(post)" = 401
+          test "$(post -H "Authorization: Bearer $token")" = 200
+          curl -sSf -o metrics.txt http://127.0.0.1:9464/metrics
+          grep -q '^http_server_request_duration_seconds' metrics.txt
+          start=$(date +%s)
+          docker stop -t 70 serve
+          echo "stopped in $(( $(date +%s) - start ))s"
+          docker logs serve
+          test "$(docker inspect --format '{{.State.ExitCode}}' serve)" -eq 0
+          if docker logs serve 2>&1 | grep -qF "$token"; then echo "the token is in the logs"; exit 1; fi
+          docker rm serve
+      - name: docker compose example
+        env:
+          DURABLE_MCP_TOKENS_FILE: ${{ runner.temp }}/tokens
+          COMPOSE_FILE: deploy/compose/compose.yaml
+        run: |
+          docker compose config -q
+          docker compose up -d --build --wait --wait-timeout 120
+          for _ in $(seq 30); do
+            docker compose logs worker | grep -q 'Started Worker' && break
+            sleep 1
+          done
+          docker compose ps
+          docker compose logs worker
+          docker compose logs worker | grep -q 'Started Worker'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/mcp)" = 401
+          docker compose down -t 70
