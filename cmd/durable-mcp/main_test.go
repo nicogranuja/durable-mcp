@@ -19,6 +19,17 @@ func env(kv map[string]string) func(string) string {
 // noStdin is an empty standard input.
 func noStdin() io.ReadCloser { return io.NopCloser(strings.NewReader("")) }
 
+func TestVersionString(t *testing.T) {
+	t.Parallel()
+
+	if got, want := versionString("dev", ""), "durable-mcp dev"; got != want {
+		t.Errorf("versionString without a commit = %q, want %q", got, want)
+	}
+	if got, want := versionString("v0.1.0", "7bff147"), "durable-mcp v0.1.0 (commit 7bff147)"; got != want {
+		t.Errorf("versionString with a commit = %q, want %q", got, want)
+	}
+}
+
 func TestRun(t *testing.T) {
 	t.Parallel()
 

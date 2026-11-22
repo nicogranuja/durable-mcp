@@ -17,8 +17,13 @@ import (
 	"syscall"
 )
 
-// version is set at build time with -ldflags "-X main.version=...".
-var version = "dev"
+// version and commit are set at build time with
+// -ldflags "-X main.version=... -X main.commit=...", as the Makefile and the
+// Dockerfile do.
+var (
+	version = "dev"
+	commit  = ""
+)
 
 func main() {
 	ctx, stop := signalContext()
@@ -82,10 +87,19 @@ Flags:
 	}
 
 	if *showVersion {
-		fmt.Fprintf(stdout, "durable-mcp %s\n", version)
+		fmt.Fprintln(stdout, versionString(version, commit))
 		return 0
 	}
 
 	fs.Usage()
 	return 2
+}
+
+// versionString is what -version prints: the version, and the commit it was
+// built from when that is known.
+func versionString(version, commit string) string {
+	if commit == "" {
+		return "durable-mcp " + version
+	}
+	return fmt.Sprintf("durable-mcp %s (commit %s)", version, commit)
 }

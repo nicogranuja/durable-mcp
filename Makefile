@@ -10,7 +10,8 @@ GOVULNCHECK   ?= go run golang.org/x/vuln/cmd/govulncheck@latest
 WORKFLOWCHECK ?= go run go.temporal.io/sdk/contrib/tools/workflowcheck@$(WORKFLOWCHECK_VERSION)
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X main.version=$(VERSION)
+COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null)
+LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
 .DEFAULT_GOAL := check
 
