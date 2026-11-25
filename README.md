@@ -19,7 +19,8 @@ requests, and commit activity, fetched through the GitHub REST API with paginati
       stdio and streamable HTTP, with a "use it from Claude Code" guide.
 - [x] **Hardening:** idempotent starts, timeouts and cancellation end to end, input validation, an error taxonomy
       agents can act on, OpenTelemetry metrics and traces, a Grafana dashboard, and bearer-token auth.
-- [ ] **Docs and release:** architecture and design notes, an operations runbook, a Dockerfile (done), and v0.1.0.
+- [ ] **Docs and release:** [architecture](docs/architecture.md) and [design decisions](docs/decisions.md) (done), an
+      operations runbook, a Dockerfile (done), and v0.1.0.
 
 ## Layout
 
@@ -100,6 +101,7 @@ into an answer the agent can act on instead of a hung call.
 | Temporal client | each call from a tool | 10s | Start, describe, get result, and cancel. A call that runs out of time becomes a tool error that says what is safe to retry. |
 | | progress query | 5s | A query needs a worker to answer it; without one, `job_status` answers without progress instead of waiting. |
 | | health check at startup | 5s | `serve` starts anyway, and its tools say Temporal is unreachable until it is back. |
+| | readiness check | 2s | Behind `GET /readyz`, so a probe gets its answer within a typical probe timeout. |
 | | GetSystemInfo on connect | 5s | The Temporal SDK's default, for the call the worker makes when it connects. |
 | GitHub client | each request | 30s | Includes reading the body. |
 | | response size | 10 MiB | A page of 100 issues is well under 1 MiB; a larger body fails instead of filling memory. |
@@ -231,8 +233,29 @@ caveat in [Authentication](#authentication), which holds inside a container too.
 
 Both roles stop gracefully on SIGTERM. Give the container at least 70 seconds, so a stopping worker gets its full
 minute (see [Timeouts](#timeouts)): `docker stop -t 70 durable-mcp-worker`, `stop_grace_period: 70s` in Compose, or
-`terminationGracePeriodSeconds: 70` in a Kubernetes pod spec. Neither role has a health endpoint yet; until then, a TCP
-check on the `serve` port tells a load balancer the process is up, and the logs say whether Temporal is reachable.
+`terminationGracePeriodSeconds: 70` in a Kubernetes pod spec.
+
+Over HTTP, `serve` has two health endpoints on its MCP port, for probes and load balancers:
+
+- `GET /healthz` (liveness) answers `200 ok` whenever the process can answer at all. It checks nothing else, so a
+  Temporal outage does not get a healthy `serve` restarted.
+- `GET /readyz` (readiness) answers `200 ok` if Temporal answers a health check within 2 seconds, and
+  `503 unavailable` if not, when the tools could only say that Temporal is unreachable.
+
+Both need no token, so a probe can reach them, and so they answer with nothing but that one word: no version, address,
+or error. They do not change where `serve` may listen: without tokens, that is still loopback only. For example, on
+Kubernetes:
+
+```yaml
+livenessProbe:
+  httpGet: { path: /healthz, port: 8080 }
+readinessProbe:
+  httpGet: { path: /readyz, port: 8080 }
+  timeoutSeconds: 3
+```
+
+The worker has no health endpoint; whether it is polling shows in the Temporal UI (the task queue's pollers) and in its
+`temporal_*` metrics. The stdio transport has none either, since its only caller is the MCP host that started it.
 
 ### Trying it out with Docker Compose
 

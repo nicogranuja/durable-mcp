@@ -255,6 +255,11 @@ port; `/metrics` has no authentication, so its port is left out and has to be pu
 `serve` listens beyond loopback only with auth tokens, so in a container, where it has to listen on `0.0.0.0`, it needs
 a tokens file. Without tokens it refuses any address that is not a loopback IP.
 
+Over HTTP, `serve` also answers `GET /healthz` (liveness: the process is up) and `GET /readyz` (readiness: Temporal
+answered a health check within 2 seconds) on the MCP port. They need no token, so they answer only `ok` or
+`unavailable`, and they sit beside `auth.Middleware` and the telemetry wrapper rather than inside them, so the bind rule
+and the token check on `/mcp` are unchanged. The worker has no health endpoint.
+
 Both roles stop gracefully on SIGTERM, and a second signal ends the process at once. A stopping worker gives running
 activities up to a minute, the same as one attempt's start-to-close timeout, so a page being fetched can finish
 instead of being retried elsewhere. That is why the container needs a stop grace period of at least 70 seconds
@@ -263,7 +268,7 @@ instead of being retried elsewhere. That is why the container needs a stop grace
 [`deploy/compose/compose.yaml`](../deploy/compose/compose.yaml) runs a Temporal development server, the worker, and
 `serve` on one machine for trying it out, with every port on `127.0.0.1`. The CI `image` job builds the image and checks
 that it runs as non-root, refuses an unauthenticated `0.0.0.0`, answers 401 and 200 with a mounted tokens file, serves
-a metrics scrape, stops cleanly within 70 seconds, and logs no token, and it runs the Compose example with a real
+a metrics scrape, answers `/healthz` and `/readyz`, stops cleanly within 70 seconds, and logs no token, and it runs the Compose example with a real
 development server.
 
 Workers can scale out on the same task queue. Deploy a new version to all of them at once: since the activities took
