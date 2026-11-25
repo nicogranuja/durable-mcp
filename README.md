@@ -40,6 +40,10 @@ the [GitHub client](internal/github/doc.go), including why it returns rate-limit
 
 ## Architecture
 
+[docs/architecture.md](docs/architecture.md) has the component and sequence diagrams, what is and is not kept in
+workflow history, job identity, the error taxonomy, observability, and deployment, and
+[docs/decisions.md](docs/decisions.md) records the main design decisions, with the alternatives and trade-offs.
+
 ```
 AI agent (Claude Code, ...)
   │  MCP over stdio or streamable HTTP
