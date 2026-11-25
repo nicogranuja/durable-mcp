@@ -86,7 +86,7 @@ another's job by guessing its key.
 caller: strong isolation, but namespaces are an operator's unit, not something to create per token. A search attribute
 with visibility queries: needs the attribute registered on the server, and visibility can lag behind a start.
 
-**Consequences.** The check costs nothing extra, since every tool already describes the job. Ownership follows the
+**Consequences.** The check costs nothing extra, since each of those tools describes the job anyway. Ownership follows the
 caller's name, so rotating a token keeps its jobs, and every valid token for a name sees that name's jobs. Jobs started
 over stdio or without tokens belong to the empty caller and are invisible once tokens are on. The memo is readable by
 anyone with access to the Temporal namespace; this isolates callers of the MCP server, not users of Temporal. The

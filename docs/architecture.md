@@ -194,7 +194,7 @@ The chain from GitHub's answer to the agent's next step has one type per failure
 
 | GitHub client error | Activity failure type | Temporal retries | `job_result`: retryable, next step |
 |---|---|---|---|
-| `*RateLimitError` (primary or secondary) | `report.RateLimited` | Yes, at `NextRetryDelay` from GitHub's reset time (a growing backoff for repeated secondary limits); benign, so left out of failure metrics | Yes: start a new report later, or give the worker a token with a higher limit |
+| `*RateLimitError` (primary or secondary) | `report.RateLimited` | Yes, at `NextRetryDelay` from GitHub's reset time (a growing backoff for repeated secondary limits), marked benign, which the Temporal SDK logs at debug level and leaves out of its failure metrics | Yes: start a new report later, or give the worker a token with a higher limit |
 | 5xx or 408, network error, request timeout, a body that does not decode | `report.Unavailable` | Yes, exponential backoff from 1s to 1m, at most 10 attempts | Yes: start a new report in a few minutes |
 | An attempt that times out (start-to-close or heartbeat) on its last try, or the job's 24-hour timeout | `Timeout` | Attempts: yes, per the retry policy | Yes: start a new report in a few minutes, or with a shorter window |
 | 401 | `report.Unauthorized` | No | No: the operator must fix `GITHUB_TOKEN` |
