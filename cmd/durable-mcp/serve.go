@@ -317,7 +317,7 @@ func serveMCP(ctx context.Context, cfg serveConfig, stdin io.ReadCloser, stdout 
 	})
 	logAuth(cfg, logger)
 	if cfg.transport == transportHTTP {
-		return serveHTTP(ctx, server, cfg.httpAddr, cfg.tokens, tel, logger)
+		return serveHTTP(ctx, server, temporalReady(c), cfg.httpAddr, cfg.tokens, tel, logger)
 	}
 	logger.Info("Serving MCP over stdio", "TaskQueue", cfg.temporal.taskQueue)
 	err = server.Run(ctx, &mcp.IOTransport{Reader: stdin, Writer: nopWriteCloser{stdout}})
@@ -351,12 +351,12 @@ type nopWriteCloser struct{ io.Writer }
 func (nopWriteCloser) Close() error { return nil }
 
 // serveHTTP serves server over streamable HTTP until ctx is canceled.
-func serveHTTP(ctx context.Context, server *mcp.Server, addr string, tokens *auth.Tokens, tel *telemetry.Telemetry, logger *slog.Logger) error {
+func serveHTTP(ctx context.Context, server *mcp.Server, ready readinessCheck, addr string, tokens *auth.Tokens, tel *telemetry.Telemetry, logger *slog.Logger) error {
 	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}
-	srv := newHTTPServer(httpHandler(server, tokens, tel, logger), logger)
+	srv := newHTTPServer(httpHandler(server, ready, tokens, tel, logger), logger)
 	logger.Info("Serving MCP over streamable HTTP", "URL", "http://"+ln.Addr().String()+mcpPath)
 	return serveUntilDone(ctx, srv, ln, httpShutdownTimeout)
 }
@@ -427,7 +427,11 @@ func newHTTPServer(h http.Handler, logger *slog.Logger) *http.Server {
 // whatever the Host. And it gets in the way: a TLS proxy on the same host
 // that forwards to 127.0.0.1 and keeps the public Host header, as most do
 // by default, would get 403 for every request.
-func httpHandler(server *mcp.Server, tokens *auth.Tokens, tel *telemetry.Telemetry, logger *slog.Logger) http.Handler {
+//
+// The health endpoints, /healthz and /readyz, sit beside all of that on
+// the same mux, unauthenticated; see addHealthHandlers. They do not change
+// where the server may listen.
+func httpHandler(server *mcp.Server, ready readinessCheck, tokens *auth.Tokens, tel *telemetry.Telemetry, logger *slog.Logger) http.Handler {
 	var h http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
 		&mcp.StreamableHTTPOptions{
 			Stateless:                  true,
@@ -444,5 +448,6 @@ func httpHandler(server *mcp.Server, tokens *auth.Tokens, tel *telemetry.Telemet
 	}
 	mux := http.NewServeMux()
 	mux.Handle(mcpPath, h)
+	addHealthHandlers(mux, ready, logger)
 	return mux
 }

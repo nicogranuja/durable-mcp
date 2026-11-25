@@ -42,7 +42,7 @@ func TestSpansHoldNoCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := mcpserver.New(noTemporal{}, mcpserver.Options{TracerProvider: tel.TracerProvider()})
-	srv := httptest.NewServer(httpHandler(server, tokens, tel, discardLogger()))
+	srv := httptest.NewServer(httpHandler(server, alwaysReady, tokens, tel, discardLogger()))
 	t.Cleanup(srv.Close)
 
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test-host"}, nil).Connect(t.Context(), &mcp.StreamableClientTransport{
