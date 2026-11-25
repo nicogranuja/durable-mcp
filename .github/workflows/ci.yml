@@ -140,6 +140,10 @@ jobs:
           }
           test "$(post)" = 401
           test "$(post -H "Authorization: Bearer $token")" = 200
+          code() { curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080$1"; }
+          test "$(code /healthz)" = 200
+          # No Temporal server in this step: serve is alive but not ready.
+          test "$(code /readyz)" = 503
           curl -sSf -o metrics.txt http://127.0.0.1:9464/metrics
           grep -q '^http_server_request_duration_seconds' metrics.txt
           start=$(date +%s)
@@ -164,4 +168,9 @@ jobs:
           docker compose logs worker
           docker compose logs worker | grep -q 'Started Worker'
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/mcp)" = 401
+          for _ in $(seq 30); do
+            curl -sf -o /dev/null http://127.0.0.1:8080/readyz && break
+            sleep 1
+          done
+          curl -sSf http://127.0.0.1:8080/readyz
           docker compose down -t 70
