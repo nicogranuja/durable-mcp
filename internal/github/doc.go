@@ -41,8 +41,10 @@
 // hold a Temporal activity slot open and force the activity to keep
 // heartbeating while doing nothing. Returning a typed error lets the caller
 // apply its own policy. In this project the caller is a Temporal activity,
-// which is meant to fail the attempt with a retry delay derived from RetryAt,
-// so the wait happens durably in Temporal and shows up in workflow history.
+// which fails the attempt with a retry delay derived from RetryAt, so the
+// wait happens durably on the Temporal server. It does not add events to
+// workflow history: it shows in the workflow's pending activity, with the
+// attempt, the rate-limit failure, and when the next attempt is due.
 //
 // # Pagination
 //
