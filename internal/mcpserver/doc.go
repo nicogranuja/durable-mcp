@@ -44,13 +44,18 @@
 //
 // A job ID is the workflow ID: "report-" and 26 base32 characters. Without
 // an idempotency key the ID is random. With one, the ID is a hash of the
-// key, so a retried call with the same key names the same workflow, and
-// Temporal's ID reuse policy, RejectDuplicate, refuses to start it twice,
-// even after the first run finished. The workflow's memo records a
-// fingerprint of the request, so reusing a key for a different request, or
-// a key whose job has no fingerprint, is reported as an error instead of
-// returning the wrong job. Keys are shared by every client of the
-// namespace, which is why the tool asks for UUIDs.
+// caller's name and the key, so a retried call from the same caller with
+// the same key names the same workflow, and Temporal's ID reuse policy,
+// RejectDuplicate, refuses to start it twice, even after the first run
+// finished. The workflow's memo records a fingerprint of the request, so
+// reusing a key for a different request, or a key whose job has no
+// fingerprint, is reported as an error instead of returning the wrong job.
+//
+// The caller is the name of the bearer token's entry, so two callers that
+// pick the same key get two jobs, and neither can name the other's job by
+// guessing its key. Over stdio, or over HTTP without tokens, the caller is
+// empty: every client of such a server shares one set of keys, which is
+// one reason the tool asks for UUIDs.
 //
 // A start that times out may still have started the job, so its error
 // says to repeat the call with the same key, or, without a key, to check
@@ -59,7 +64,8 @@
 // A job runs for at most [JobTimeout]. Finished jobs, and so the keys that
 // map to them, are kept for the Temporal namespace's retention period.
 //
-// The tools accept only IDs of that shape, and only for RepositoryReport
-// workflows, so an agent cannot read or cancel other workflows in the
-// namespace through them.
+// The tools accept only IDs of that shape, only for RepositoryReport
+// workflows, and only for jobs the caller started (the memo records the
+// caller), so an agent cannot read or cancel other workflows in the
+// namespace, or another caller's jobs, through them.
 package mcpserver
