@@ -39,10 +39,14 @@
 //
 // Request.MaxPages bounds the pages per resource, at most MaxPagesLimit, so
 // a report has at most about 3,600 events and 2 MB of history. That is below
-// the 4,096 events at which the Temporal server suggests continue-as-new by
-// default, and far below the limits at which it warns (10,240 events) and
-// terminates a run (51,200), so the workflow does not need continue-as-new.
-// A resource with more pages is reported as truncated.
+// the 4,096 events (and 4 MB) at which the Temporal server suggests
+// continue-as-new by default, and far below the limits at which it warns
+// (10,240 events or 10 MB) and terminates a run (51,200 events or 50 MB),
+// so the workflow does not need continue-as-new. A resource with more pages
+// is reported as truncated. The warning and termination limits are in
+// Temporal's documentation; the suggestion threshold is the server's default
+// for the limit.historyCount.suggestContinueAsNew dynamic config setting. A
+// namespace can change all three, so check them on a self-hosted server.
 //
 // Adding partials is commutative and the final report sorts everything it
 // lists, so the result does not depend on the order pages arrive in.
