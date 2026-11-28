@@ -87,7 +87,8 @@ caller: strong isolation, but namespaces are an operator's unit, not something t
 with visibility queries: needs the attribute registered on the server, and visibility can lag behind a start.
 
 **Consequences.** The check costs nothing extra, since each of those tools describes the job anyway. Ownership follows the
-caller's name, so rotating a token keeps its jobs, and every valid token for a name sees that name's jobs. Jobs started
+caller's name, so rotating a token keeps its jobs. Each name has one token at a time, so a rotation cannot overlap the
+old and new tokens; the caller gets 401s from the restart until it switches. Jobs started
 over stdio or without tokens belong to the empty caller and are invisible once tokens are on. The memo is readable by
 anyone with access to the Temporal namespace; this isolates callers of the MCP server, not users of Temporal. The
 responses are identical, but the timing is not engineered to be: a missing ID gets Temporal's not-found, while another
