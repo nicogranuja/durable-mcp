@@ -19,8 +19,8 @@ requests, and commit activity, fetched through the GitHub REST API with paginati
       stdio and streamable HTTP, with a "use it from Claude Code" guide.
 - [x] **Hardening:** idempotent starts, timeouts and cancellation end to end, input validation, an error taxonomy
       agents can act on, OpenTelemetry metrics and traces, a Grafana dashboard, and bearer-token auth.
-- [ ] **Docs and release:** [architecture](docs/architecture.md) and [design decisions](docs/decisions.md) (done), an
-      operations runbook, a Dockerfile (done), and v0.1.0.
+- [ ] **Docs and release:** [architecture](docs/architecture.md), [design decisions](docs/decisions.md), an
+      [operations runbook](docs/runbook.md), and a Dockerfile (done), and v0.1.0.
 
 ## Layout
 
@@ -44,6 +44,8 @@ the [GitHub client](internal/github/doc.go), including why it returns rate-limit
 [docs/architecture.md](docs/architecture.md) has the component and sequence diagrams, what is and is not kept in
 workflow history, job identity, the error taxonomy, observability, and deployment, and
 [docs/decisions.md](docs/decisions.md) records the main design decisions, with the alternatives and trade-offs.
+[docs/runbook.md](docs/runbook.md) is for operators: stuck jobs, rate-limit storms, scaling workers, rotating tokens,
+nondeterminism after a deploy, deploys, health probes, and reading the dashboard.
 
 ```
 AI agent (Claude Code, ...)
