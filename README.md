@@ -20,7 +20,7 @@ requests, and commit activity, fetched through the GitHub REST API with paginati
 - [x] **Hardening:** idempotent starts, timeouts and cancellation end to end, input validation, an error taxonomy
       agents can act on, OpenTelemetry metrics and traces, a Grafana dashboard, and bearer-token auth.
 - [ ] **Docs and release:** [architecture](docs/architecture.md), [design decisions](docs/decisions.md), an
-      [operations runbook](docs/runbook.md), and a Dockerfile (done), and v0.1.0.
+      [operations runbook](docs/runbook.md), a Dockerfile (all done), and v0.1.0.
 
 ## Layout
 
